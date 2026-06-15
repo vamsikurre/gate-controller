@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------
+# ESP RainMaker Gate Controller — sdkconfig.defaults
+# ---------------------------------------------------------------
+# Targeting: ESP-IDF v5.4 + ESP32-WROOM-32
+# ---------------------------------------------------------------
+
+# --- Flash & Partition ---
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- ESP RainMaker ---
+# Use Assisted Claiming (original ESP32-WROOM-32 does NOT support Self-Claiming)
+CONFIG_ESP_RMAKER_ASSISTED_CLAIM=y
+CONFIG_ESP_RMAKER_USE_NVS=y
+
+# --- BLE Provisioning ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_WIFI_PROV_TRANSPORT_BLE=y
+CONFIG_WIFI_PROV_BLE_BONDING=n
+
+# --- OTA Updates ---
+CONFIG_ESP_RMAKER_OTA_AUTOFETCH=y
+CONFIG_ESP_RMAKER_OTA_AUTOFETCH_PERIOD=3600
+
+# --- Watchdog ---
+CONFIG_ESP_TASK_WDT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- FreeRTOS Stack Sizes ---
+# Timer Service task needs extra stack for RainMaker callbacks (OTA, scheduling)
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+# Main task needs enough stack for RainMaker init
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

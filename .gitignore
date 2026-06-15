@@ -1,0 +1,12 @@
+# ESP-IDF build artifacts
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/managed_components/
+
+# Editor and system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

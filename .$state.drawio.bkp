@@ -1,0 +1,174 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.0.3 Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36" version="29.0.3">
+  <diagram name="Page-1" id="JC5w0cLJDOWsFKwSyzA_">
+    <mxGraphModel dx="1701" dy="996" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="59CsES4KdJi-zrLfN42J-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-1" target="59CsES4KdJi-zrLfN42J-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-16" value="If not already in opened/opening state" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-6">
+          <mxGeometry x="-0.0169" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-1" value="Open cmd" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="328" y="143" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-5" target="59CsES4KdJi-zrLfN42J-7">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="353" y="392" />
+              <mxPoint x="271" y="392" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-11" value="If gate reached open&amp;nbsp;&lt;div&gt;limit switch with in 20 sec&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-8">
+          <mxGeometry x="0.0734" y="1" relative="1" as="geometry">
+            <mxPoint x="-41" y="-16" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-5" target="59CsES4KdJi-zrLfN42J-9">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="423" y="393" />
+              <mxPoint x="493" y="393" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-12" value="If gate not able to reach open&amp;nbsp;&lt;div&gt;limit switch with in 20 sec&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-10">
+          <mxGeometry x="-0.1275" relative="1" as="geometry">
+            <mxPoint x="47" y="21" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-5" target="59CsES4KdJi-zrLfN42J-13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-18" value="Obstruction triggered&lt;div&gt;on pin 27&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-17">
+          <mxGeometry x="0.08" y="1" relative="1" as="geometry">
+            <mxPoint x="-6" y="-2" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-5" value="Opening" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="328" y="282" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-7" value="Opened" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="188" y="455" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-9" value="Stopped" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="427" y="455" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-13" value="Obstructed" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="607" y="282" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-21" target="59CsES4KdJi-zrLfN42J-28">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-20" value="If not already in closed/closingstate" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-19">
+          <mxGeometry x="-0.0169" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-21" value="Close cmd" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="305" y="574" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-28" target="59CsES4KdJi-zrLfN42J-29">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330" y="823" />
+              <mxPoint x="248" y="823" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-23" value="If gate reached close&lt;div&gt;limit switch with in 20 sec&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-22">
+          <mxGeometry x="0.0734" y="1" relative="1" as="geometry">
+            <mxPoint x="-41" y="-16" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-28" target="59CsES4KdJi-zrLfN42J-30">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="400" y="824" />
+              <mxPoint x="470" y="824" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-25" value="If gate not able to reach close&lt;div&gt;limit switch with in 20 sec&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-24">
+          <mxGeometry x="-0.1275" relative="1" as="geometry">
+            <mxPoint x="47" y="21" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-28" target="59CsES4KdJi-zrLfN42J-31">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-27" value="Obstruction triggered&lt;div&gt;on pin 27&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-26">
+          <mxGeometry x="0.08" y="1" relative="1" as="geometry">
+            <mxPoint x="-6" y="-2" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-28" value="Closing" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="305" y="713" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-29" value="Closed" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="165" y="886" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-30" value="Stopped" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="404" y="886" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-31" value="Obstructed" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="584" y="713" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-32" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-34" target="59CsES4KdJi-zrLfN42J-41">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-33" value="If not already in stopped/obstructed/opened/closed" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-32">
+          <mxGeometry x="-0.0169" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-34" value="Stop cmd" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1017" y="143" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-41" value="stopped" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1017" y="282" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-58" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-60" target="59CsES4KdJi-zrLfN42J-67">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-59" value="If not already in opened/opening state" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-58">
+          <mxGeometry x="-0.0169" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-60" value="partial cmd" style="ellipse;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1017" y="575" width="120" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-65" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-67" target="59CsES4KdJi-zrLfN42J-70">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-66" value="Obstruction triggered&lt;div&gt;on pin 27&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-65">
+          <mxGeometry x="0.08" y="1" relative="1" as="geometry">
+            <mxPoint x="-6" y="-2" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-72" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="59CsES4KdJi-zrLfN42J-67" target="59CsES4KdJi-zrLfN42J-71">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-73" value="After 5 seconds" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="59CsES4KdJi-zrLfN42J-72">
+          <mxGeometry x="-0.2134" y="-2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-67" value="Opening" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1017" y="714" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-70" value="Obstructed" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="1296" y="714" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="59CsES4KdJi-zrLfN42J-71" value="Stopped" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="1017" y="851" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
