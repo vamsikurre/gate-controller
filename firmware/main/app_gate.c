@@ -266,12 +266,14 @@ static void gate_task(void *arg)
                 cancel_movement_tracking();
                 s_stopped = true;
                 s_obstructed = false;
+                s_last_cmd = GATE_CMD_STOP;
                 s_state = GATE_STATE_PULSING;
                 relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
             } else {
                 /* Step 3: Pulse STOP relay automatically after delay completed */
                 s_stopped = true;
                 s_obstructed = false;
+                s_last_cmd = GATE_CMD_STOP;
                 s_state = GATE_STATE_PULSING;
                 relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
             }
@@ -349,6 +351,7 @@ static void gate_task(void *arg)
 
         s_state = GATE_STATE_IDLE;
         ESP_LOGI(TAG, "Ready for next command");
+        notify_status();
     }
 }
 
