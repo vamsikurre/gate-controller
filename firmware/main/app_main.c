@@ -114,15 +114,15 @@ static esp_rmaker_device_t *s_gate_device = NULL;
  * This function is called by the RainMaker framework whenever the
  * user taps a button in the phone app (or a schedule triggers).
  *
- * It receives:
- *   - device: which device the command is for (we only have one)
- *   - param:  which parameter changed (e.g. "Open", "Close", etc.)
- *   - val:    the new value (bool true for our trigger buttons)
- *   - ctx:    context about where the command came from
+ * Java Note on Parameters:
+ * - `const esp_rmaker_device_t *device`: A pointer to a device struct (like a read-only object reference).
+ * - `const esp_rmaker_param_t *param`: A pointer to the specific parameter changing.
+ * - `const esp_rmaker_param_val_t val`: A struct passed by value containing the new value.
+ * - `void *priv_data`: A generic pointer (like Java's `Object`) for custom user data.
+ * - `esp_rmaker_write_ctx_t *ctx`: Pointer to context data containing the command source (Cloud, Local, at).
  *
- * IMPORTANT: This runs in the MQTT task context. We must NOT block
- * here (no vTaskDelay!). We post the command to the gate queue and
- * return immediately.
+ * IMPORTANT: This runs in the RainMaker MQTT task context. We must NOT block
+ * here (no vTaskDelay!). We post the command to the gate queue and return immediately.
  * --------------------------------------------------------------- */
 static esp_err_t write_cb(const esp_rmaker_device_t *device,
                            const esp_rmaker_param_t *param,
@@ -133,15 +133,28 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
     const char *param_name = esp_rmaker_param_get_name(param);
 
     if (ctx) {
+        /* Java equivalent: ctx.src. In C, if we have a pointer to a struct, 
+         * we access its fields using the arrow `->` operator (dereference + field access). */
         ESP_LOGI(TAG, "Received write request via: %s",
                  esp_rmaker_device_cb_src_to_str(ctx->src));
     }
 
     ESP_LOGI(TAG, "Parameter: %s", param_name);
 
+    /* esp_err_t is an integer error code. ESP_OK is 0 (success).
+     * Java equivalent: return values instead of throwing exceptions. */
     esp_err_t err = ESP_OK;
 
-    /* ---- Action Buttons (trigger type: bool) ---- */
+    /* ---- Action Buttons (trigger type: bool) ---- 
+     * Java note: In Java, we do: paramName.equals(PARAM_OPEN).
+     * In C, we use `strcmp(str1, str2)`. It returns:
+     * - 0 if the strings are identical.
+     * - non-zero if they differ.
+     * 
+     * `val.val.b` accesses a Union field. In C, a Union allows multiple types 
+     * (bool, int, float, string) to share the same memory location to save RAM.
+     * Here, `.b` reads the boolean representation of the parameter value.
+     */
     if (strcmp(param_name, PARAM_OPEN) == 0 && val.val.b) {
         err = gate_command(GATE_CMD_OPEN);
     }

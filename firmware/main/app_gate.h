@@ -1,8 +1,29 @@
 /*
  * app_gate.h — Gate control API
  *
- * Public interface for the relay pulse state machine.
- * All functions are thread-safe (use a FreeRTOS queue internally).
+ * ===================================================================
+ *  A JAVA DEVELOPER'S GUIDE TO C HEADER FILES & TYPES
+ * ===================================================================
+ *
+ *  1. HEADER FILES vs CLASSES:
+ *     - In Java, a class defines both the interface (method signatures) and 
+ *       the implementation (method bodies) in a single `.java` file.
+ *     - In C, these are separated. The `.h` (header) file is like a Java Interface 
+ *       or public API contract. It declares the functions and data structures.
+ *       The `.c` file contains the actual code.
+ *     - `#include "app_gate.h"` is similar to Java's `import`.
+ *
+ *  2. ENUMS IN C:
+ *     - Java enums are full-featured classes.
+ *     - In C, `typedef enum` defines a named set of integer constants. Under the 
+ *       hood, `GATE_CMD_OPEN` is just `0`, `GATE_CMD_CLOSE` is `1`, etc.
+ *       It provides syntax help but is just a lightweight integer mapping.
+ *
+ *  3. THREAD SAFETY:
+ *     - All public functions declared here are thread-safe. They use FreeRTOS
+ *       queues internally to hand commands over to a dedicated worker thread.
+ *
+ * ===================================================================
  */
 
 #pragma once
@@ -10,11 +31,14 @@
 #include "esp_err.h"
 #include <stdbool.h>
 
+/* extern "C" ensures that if this C header is included in a C++ file, 
+ * the compiler won't mangle the function names (similar to JVM name resolution). */
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Gate commands — each maps to a specific relay */
+/* Gate commands — each maps to a specific relay.
+ * Java equivalent: public enum GateCommand { OPEN, CLOSE, STOP, PARTIAL_OPEN } */
 typedef enum {
     GATE_CMD_OPEN,
     GATE_CMD_CLOSE,
@@ -129,16 +153,28 @@ bool gate_is_obstructed(void);
 
 /* ---------------------------------------------------------------
  * Callbacks — used by app_main.c to push updates to RainMaker
+ *
+ * Java Note: C does not have classes or interfaces. To implement the 
+ * Observer/Listener pattern, we use "Function Pointers". 
+ * 
+ * `typedef void (*gate_position_cb_t)(gate_position_t new_pos);`
+ * defines a type named `gate_position_cb_t` representing any function 
+ * that takes a `gate_position_t` argument and returns `void`.
+ * 
+ * Think of this as a Java functional interface:
+ * `@FunctionalInterface
+ * public interface GatePositionCallback {
+ *     void call(GatePosition pos);
+ * }`
  * --------------------------------------------------------------- */
 
-/**
- * Callback type for status/position/obstruction change notifications.
- */
 typedef void (*gate_position_cb_t)(gate_position_t new_pos);
 typedef void (*gate_status_cb_t)(const char *status);
 
 /**
- * Register callbacks for events.
+ * Register callbacks for events (Observer Pattern).
+ * In Java: `public void setPositionListener(GatePositionCallback cb)`
+ *
  * - position_cb: called when gate position changes (limit switches)
  * - status_cb: called when movement tracking status changes
  *              (target reached, timeout, obstruction)

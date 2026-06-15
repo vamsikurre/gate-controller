@@ -44,12 +44,24 @@
 static const char *TAG = "gate";
 
 /* ---------------------------------------------------------------
- * Internal state
+ * Internal state (Global variables scoped to this file)
+ *
+ * Java note: 
+ * In C, there are no classes. File-level global variables declared with 
+ * `static` are private to this file (similar to `private static` fields 
+ * in a singleton class). Only code inside this `app_gate.c` file can 
+ * read or modify them.
  * --------------------------------------------------------------- */
 static gate_state_t     s_state       = GATE_STATE_IDLE;
 static gate_cmd_t       s_last_cmd;
 static gate_movement_t  s_movement    = GATE_MOVE_NONE;
+
+/* TickType_t represents scheduler clock ticks. 
+ * Java Note: Think of it like System.currentTimeMillis(). FreeRTOS counts ticks 
+ * (usually 1 tick = 1ms or 10ms depending on CONFIG_FREERTOS_HZ). */
 static TickType_t       s_move_deadline = 0;
+
+/* Standard C booleans. Since C99, bool is supported (historically C used integers 0/1). */
 static bool             s_obstructed  = false;
 static bool             s_timed_out   = false;
 static bool             s_stopped     = false;
@@ -58,10 +70,14 @@ static bool             s_stopped     = false;
 static uint32_t s_pulse_duration_ms  = DEFAULT_PULSE_OPEN_MS;
 static uint32_t s_partial_delay_ms   = DEFAULT_PARTIAL_DELAY_MS;
 
-/* FreeRTOS queue: holds pending commands (depth = 1, we reject if full) */
+/* FreeRTOS queue: A thread-safe message queue.
+ * Java note: This behaves exactly like an ArrayBlockingQueue<GateCommand> of capacity 1. 
+ * Any task (thread) can write to it, and another task can block waiting to read from it. */
 static QueueHandle_t s_cmd_queue = NULL;
 
-/* Callbacks */
+/* Callbacks: Function pointers.
+ * Java note: Think of these like Interfaces or Listener objects (e.g. Consumer<Position>).
+ * They store the address of a function to be executed when an event occurs. */
 static gate_position_cb_t s_position_cb = NULL;
 static gate_status_cb_t   s_status_cb   = NULL;
 
@@ -103,12 +119,20 @@ static uint32_t cmd_to_pulse_ms(gate_cmd_t cmd)
 
 /**
  * Pulse a single relay: LOW for duration_ms, then HIGH.
+ * Java note: This functions like a blocking write to an I/O port.
+ * We set the pin state, sleep the current thread (task), and then unset it.
  */
 static void relay_pulse(int gpio, uint32_t duration_ms)
 {
     ESP_LOGI(TAG, "Relay GPIO %d ON (pulse %lu ms)", gpio, (unsigned long)duration_ms);
+    /* RELAY_ON is 0 (Active-LOW: shorting the pin to GND closes the physical relay contact) */
     gpio_set_level(gpio, RELAY_ON);
+    
+    /* pdMS_TO_TICKS converts milliseconds into RTOS scheduler ticks.
+     * vTaskDelay is like Thread.sleep(duration_ms) — it yields CPU control to other tasks. */
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    
+    /* RELAY_OFF is 1 (setting the pin HIGH turns off the relay coil) */
     gpio_set_level(gpio, RELAY_OFF);
     ESP_LOGI(TAG, "Relay GPIO %d OFF", gpio);
 }
@@ -146,76 +170,110 @@ static void cancel_movement_tracking(void)
  * --------------------------------------------------------------- */
 static void gate_task(void *arg)
 {
+    /* gate_cmd_t is an integer type (enum). This variable will hold our current command.
+     * Java equivalent: GateCommand cmd; */
     gate_cmd_t cmd;
 
+    /* Java equivalent: public void run() { while (true) { ... } }
+     * This is the core run-loop of the gate_task thread. It runs forever. 
+     * In embedded systems, worker threads must never return. if a task function returns,
+     * it will crash the system unless explicitly deleted via vTaskDelete(NULL). */
     for (;;) {
-        /* Block here until a command arrives */
+        /* Block the thread here until a command arrives.
+         * Java equivalent: cmd = s_cmd_queue.take(); // blocks until an item is available
+         *
+         * Detailed C/RTOS explanation:
+         * - s_cmd_queue: the thread-safe queue handle.
+         * - &cmd: the address-of operator. C is pass-by-value. To write the dequeued command
+         *         directly into our local variable, we pass its memory address (pointer).
+         * - portMAX_DELAY: tells the FreeRTOS scheduler to put this task to sleep indefinitely
+         *                  and consume 0% CPU until a message is posted to the queue.
+         */
         if (xQueueReceive(s_cmd_queue, &cmd, portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
         s_last_cmd = cmd;
 
+        /* =================================================================
+         * CASE 1: PARTIAL OPEN COMMAND
+         * =================================================================
+         * Rule: The gate should first close completely (pre-close) and then 
+         * open partially. If the pre-close times out, it should STILL open
+         * partially. It only aborts on physical obstruction or STOP command.
+         * ================================================================= */
         if (cmd == GATE_CMD_PARTIAL_OPEN) {
-            /* Check if already in closed state */
+            /* Read current physical position of the gate from the limit switches */
             gate_position_t pos = gate_get_position();
             if (pos != GATE_POS_CLOSED) {
-                /* Not closed: first run the Close sequence */
+                /* Gate is not closed: we must run a CLOSE sequence first */
                 ESP_LOGI(TAG, "Gate not closed. Running CLOSE sequence first before partial open.");
 
-                /* Temporarily set last cmd to CLOSE so status reports "Closing" */
+                /* Temporarily update s_last_cmd to CLOSE so our status reporting reads "Closing" */
                 s_last_cmd = GATE_CMD_CLOSE;
 
-                /* Step A: Pulse CLOSE relay */
+                /* Step A: Pulse the physical CLOSE relay (hold 500ms, then release) */
                 s_state = GATE_STATE_PULSING;
                 relay_pulse(GPIO_RELAY_CLOSE, cmd_to_pulse_ms(GATE_CMD_CLOSE));
 
-                /* Step B: Wait/track closing movement */
+                /* Step B: Start background tracking for the close movement. 
+                 * This sets s_movement to GATE_MOVE_CLOSING and sets a 20-second timeout deadline. */
                 start_movement_tracking(GATE_MOVE_CLOSING);
                 notify_status();
 
                 bool close_success = false;
                 bool interrupted_by_stop = false;
 
+                /* Monitor movement while the gate is closing.
+                 * Java Note: In Java, we might use a CountDownLatch, a Future, or a lock condition.
+                 * In FreeRTOS, we loop and poll with a short timeout. */
                 while (s_movement == GATE_MOVE_CLOSING) {
-                    /* Check if a command is received in the queue (like STOP) */
+                    /* Check if a new command is received on the queue (e.g. an emergency STOP).
+                     * We poll the queue with a 100ms timeout (converted to scheduler ticks).
+                     * Java equivalent: GateCommand nextCmd = s_cmd_queue.poll(100, TimeUnit.MILLISECONDS); */
                     gate_cmd_t next_cmd;
                     if (xQueueReceive(s_cmd_queue, &next_cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
                         if (next_cmd == GATE_CMD_STOP) {
                             ESP_LOGI(TAG, "Close sequence during Partial Open interrupted by STOP");
+                            /* Abort the movement tracking immediately */
                             cancel_movement_tracking();
                             s_stopped = true;
                             interrupted_by_stop = true;
+                            
+                            /* Pulse physical STOP relay immediately */
                             s_state = GATE_STATE_PULSING;
                             relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
                             break;
                         } else {
+                            /* Any other commands (OPEN/CLOSE/PARTIAL) are ignored/rejected while busy */
                             ESP_LOGW(TAG, "Unexpected command %d during partial close tracking", next_cmd);
                         }
                     }
                 }
 
-                /* We proceed as long as there was no obstruction and the user did not command a stop */
+                /* If we didn't hit an obstruction and the user didn't command a STOP,
+                 * we consider this phase done (even if it timed out, as per instructions) */
                 if (!s_obstructed && !interrupted_by_stop) {
                     close_success = true;
                 }
 
                 if (!close_success) {
                     ESP_LOGW(TAG, "Close sequence before partial open failed or was interrupted. Aborting partial open.");
-                    /* Transition to cooldown then ready */
+                    /* Cool down the relays for 1 second, then return to IDLE */
                     s_state = GATE_STATE_COOLDOWN;
                     vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
                     s_state = GATE_STATE_IDLE;
                     notify_status();
-                    continue; // Skip the rest of the partial open sequence
+                    continue; /* Jump back to the top of the event loop */
                 }
 
-                /* Close completed (or timed out, which we allow), wait for cooldown before starting the open pulse */
+                /* Close sequence finished (either reached limit switch or timed out).
+                 * Let the gate motor rest/settle during a 1-second cooldown. */
                 ESP_LOGI(TAG, "Close sequence completed. Performing cooldown before partial open.");
                 s_state = GATE_STATE_COOLDOWN;
                 vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
 
-                /* Restore last cmd to PARTIAL_OPEN */
+                /* Restore the command state to PARTIAL_OPEN for the next step */
                 s_last_cmd = GATE_CMD_PARTIAL_OPEN;
             }
 
@@ -224,12 +282,15 @@ static void gate_task(void *arg)
             s_stopped = false;
             s_obstructed = false;
 
-            /* Step 1: Pulse OPEN relay */
+            /* Step 1: Pulse OPEN relay to start gate opening */
             s_state = GATE_STATE_PULSING;
             relay_pulse(GPIO_RELAY_OPEN, cmd_to_pulse_ms(GATE_CMD_OPEN));
             notify_status();
 
-            /* Step 2: Wait for the configured delay, but check if we get a STOP command or obstruction */
+            /* Step 2: Wait for the configured partial delay (default 5 seconds).
+             * We can't use simple sleep/delay because we must remain responsive to:
+             * 1. Obstruction signals.
+             * 2. Manual STOP commands. */
             s_state = GATE_STATE_PARTIAL_WAIT;
             ESP_LOGI(TAG, "Partial wait: %lu ms", (unsigned long)s_partial_delay_ms);
             notify_status();
@@ -239,15 +300,19 @@ static void gate_task(void *arg)
             bool interrupted = false;
             bool obstructed = false;
 
+            /* Loop until the elapsed ticks exceed the target delay ticks.
+             * Java note: In Java, we'd do: while (System.currentTimeMillis() - startTime < delayMs) { ... }
+             * Note on C math: Unsigned subtraction `xTaskGetTickCount() - start_tick` handles tick overflow 
+             * (wrap-around) automatically without any errors! */
             while ((xTaskGetTickCount() - start_tick) < delay_ticks) {
-                /* Poll for obstruction every 100ms */
+                /* Check safety obstruction input */
                 if (gate_is_obstructed()) {
                     ESP_LOGW(TAG, "Obstruction detected during Partial Open!");
                     obstructed = true;
                     break;
                 }
 
-                /* Check if a command is received (like STOP) */
+                /* Poll for incoming emergency STOP commands every 100ms */
                 gate_cmd_t next_cmd;
                 if (xQueueReceive(s_cmd_queue, &next_cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
                     if (next_cmd == GATE_CMD_STOP) {
@@ -259,10 +324,12 @@ static void gate_task(void *arg)
                     }
                 }
             }
+
             if (obstructed) {
                 s_obstructed = true;
                 s_stopped = false;
             } else if (interrupted) {
+                /* STOP command received during opening phase: pulse physical STOP relay */
                 cancel_movement_tracking();
                 s_stopped = true;
                 s_obstructed = false;
@@ -270,7 +337,7 @@ static void gate_task(void *arg)
                 s_state = GATE_STATE_PULSING;
                 relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
             } else {
-                /* Step 3: Pulse STOP relay automatically after delay completed */
+                /* Delay successfully completed! Pulse physical STOP relay to hold the gate midway */
                 s_stopped = true;
                 s_obstructed = false;
                 s_last_cmd = GATE_CMD_STOP;
@@ -281,36 +348,47 @@ static void gate_task(void *arg)
 
             ESP_LOGI(TAG, "=== PARTIAL OPEN sequence complete ===");
 
-            /* No movement tracking for partial — it's self-contained */
-
-        } else if (cmd == GATE_CMD_STOP) {
-            /* --- Stop command --- */
+        }
+        /* =================================================================
+         * CASE 2: STOP COMMAND
+         * ================================================================= */
+        else if (cmd == GATE_CMD_STOP) {
             ESP_LOGI(TAG, "Command: STOP");
 
-            /* Cancel any active movement tracking */
+            /* Cancel active movement tracking (opening/closing monitoring thread is stopped) */
             cancel_movement_tracking();
 
             s_state = GATE_STATE_PULSING;
             relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
-
-        } else {
-            /* --- Open or Close --- */
+        }
+        /* =================================================================
+         * CASE 3: OPEN OR CLOSE COMMANDS
+         * ================================================================= */
+        else {
             int gpio = cmd_to_gpio(cmd);
             uint32_t pulse_ms = cmd_to_pulse_ms(cmd);
 
             ESP_LOGI(TAG, "Command: %s",
                      cmd == GATE_CMD_OPEN ? "OPEN" : "CLOSE");
 
+            /* Pulse the appropriate relay (OPEN or CLOSE) */
             s_state = GATE_STATE_PULSING;
             relay_pulse(gpio, pulse_ms);
 
-            /* Start movement tracking — status stays "Opening"/"Closing"
-             * until limit switch confirms or 10s timeout */
+            /* Start background tracking. The position_monitor_task will look for the 
+             * respective limit switch or obstruction for up to 20 seconds. */
             start_movement_tracking(
                 cmd == GATE_CMD_OPEN ? GATE_MOVE_OPENING : GATE_MOVE_CLOSING);
         }
 
-        /* --- Cooldown period --- */
+        /* =================================================================
+         * COOLDOWN PERIOD
+         * =================================================================
+         * Rule: Force a 1-second delay after any operation to protect the relays
+         * and motors from back-to-back switching stress.
+         * Exception: A manual STOP command must execute instantly, interrupting
+         * the cooldown period.
+         * ================================================================= */
         s_state = GATE_STATE_COOLDOWN;
         ESP_LOGI(TAG, "Cooldown: %d ms", DEFAULT_COOLDOWN_MS);
 
@@ -324,11 +402,13 @@ static void gate_task(void *arg)
             }
             TickType_t remaining = cooldown_ticks - elapsed;
 
+            /* Block on the command queue for the REMAINING duration of the cooldown.
+             * This allows us to wake up immediately if a command arrives. */
             gate_cmd_t pending_cmd;
             if (xQueueReceive(s_cmd_queue, &pending_cmd, remaining) == pdTRUE) {
                 if (pending_cmd == GATE_CMD_STOP) {
+                    /* Emergency STOP: abort cooldown, pulse STOP relay, and restart cooldown */
                     ESP_LOGI(TAG, "STOP command received during cooldown! Processing immediately.");
-                    /* Execute STOP logic immediately */
                     cancel_movement_tracking();
                     s_stopped = true;
                     s_obstructed = false;
@@ -339,42 +419,59 @@ static void gate_task(void *arg)
                     relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
                     notify_status();
 
-                    /* Reset cooldown for the STOP command */
+                    /* Reset the 1-second cooldown specifically for the STOP pulse we just fired */
                     cooldown_start = xTaskGetTickCount();
                     cooldown_ticks = pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS);
                     s_state = GATE_STATE_COOLDOWN;
                 } else {
+                    /* Reject any non-STOP commands during active cooldown */
                     ESP_LOGW(TAG, "Command %d rejected during active cooldown", pending_cmd);
                 }
             }
         }
 
+        /* Cooldown finished: transition to IDLE and wait for next command */
         s_state = GATE_STATE_IDLE;
         ESP_LOGI(TAG, "Ready for next command");
-        notify_status();
-    }
-}
-
-/* ---------------------------------------------------------------
+        notify/* ---------------------------------------------------------------
  * Public API
  * --------------------------------------------------------------- */
 
+/**
+ * Initialise the gate hardware configuration and background tasks.
+ * Java Note: Think of this as our application initializer/bootstrap method.
+ * We configure the hardware pins and start the daemon threads (FreeRTOS Tasks).
+ *
+ * @return ESP_OK (0) on success, or ESP_FAIL (-1) if task/queue creation fails.
+ */
 esp_err_t gate_init(void)
 {
     ESP_LOGI(TAG, "Initialising gate control GPIOs");
 
-    /* Configure all relay GPIOs as outputs, default HIGH (OFF) */
+    /* Configure all relay GPIOs as outputs, default HIGH (OFF)
+     * Java Note: In C, we declare arrays using `type name[] = { ... }`.
+     * `sizeof(relay_gpios) / sizeof(relay_gpios[0])` calculates the array length
+     * (total bytes of the array divided by bytes of one element). */
     const int relay_gpios[] = {
         GPIO_RELAY_OPEN, GPIO_RELAY_CLOSE, GPIO_RELAY_STOP, GPIO_RELAY_SPARE
     };
 
     for (int i = 0; i < sizeof(relay_gpios) / sizeof(relay_gpios[0]); i++) {
+        /* Reset and initialize the GPIO pin */
         gpio_reset_pin(relay_gpios[i]);
+        /* Set direction as OUTPUT (we write to relays) */
         gpio_set_direction(relay_gpios[i], GPIO_MODE_OUTPUT);
-        gpio_set_level(relay_gpios[i], RELAY_OFF);  /* Ensure OFF at boot */
+        /* Force pin to HIGH (RELAY_OFF = 1) at boot to prevent relays from pulsing on power-up */
+        gpio_set_level(relay_gpios[i], RELAY_OFF);
     }
 
-    /* Configure limit switch GPIOs as inputs with internal pull-ups */
+    /* Configure limit switch GPIOs as inputs with internal pull-ups
+     *
+     * Why PULL-UP?
+     * The limit switches are dry contacts. When open, the line "floats" and would give random noise.
+     * Enabling the internal pull-up resistor pulls the pin to 3.3V (HIGH / 1) by default.
+     * When the gate reaches the limit and hits the switch, the contact shorts the pin to GND (LOW / 0).
+     */
     const int input_gpios[] = { GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION };
     for (int i = 0; i < sizeof(input_gpios) / sizeof(input_gpios[0]); i++) {
         gpio_reset_pin(input_gpios[i]);
@@ -384,21 +481,31 @@ esp_err_t gate_init(void)
     ESP_LOGI(TAG, "Inputs configured: OP=GPIO%d, CL=GPIO%d, OBSTRUCTION=GPIO%d",
              GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION);
 
-    /* Create command queue (depth 1 = reject if already processing) */
+    /* Create command queue (depth 1 = reject if already processing a command)
+     * Java equivalent: s_cmd_queue = new ArrayBlockingQueue<>(1); */
     s_cmd_queue = xQueueCreate(1, sizeof(gate_cmd_t));
     if (s_cmd_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create command queue");
         return ESP_FAIL;
     }
 
-    /* Create the gate control task */
+    /* Create the main gate control task
+     * Java equivalent: new Thread(gate_task).start();
+     *
+     * Task properties:
+     * - gate_task: function pointer containing the run-loop code.
+     * - "gate_task": thread label for debugging.
+     * - 4096: Stack size in bytes.
+     * - 5: Priority (higher priority runs first; 5 is relatively high).
+     */
     BaseType_t ret = xTaskCreate(gate_task, "gate_task", 4096, NULL, 5, NULL);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create gate task");
         return ESP_FAIL;
     }
 
-    /* Create the position & movement monitor task */
+    /* Create the position & movement monitor task (polls limit switches every 500ms)
+     * Java equivalent: ScheduledExecutorService or another background Thread. */
     ret = xTaskCreate(position_monitor_task, "pos_task", 2048, NULL, 4, NULL);
     if (ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to create position monitor task");
@@ -410,9 +517,18 @@ esp_err_t gate_init(void)
     return ESP_OK;
 }
 
+/**
+ * Public API to send a command to the gate.
+ * Java Note: This is a thread-safe producer method. It checks if the command 
+ * is allowed based on the gate's state machine, and if valid, posts it to the
+ * queue for execution by the background task thread.
+ *
+ * @param cmd The gate command (OPEN, CLOSE, STOP, PARTIAL_OPEN)
+ * @return ESP_OK (0) if successfully queued, or ESP_ERR_INVALID_STATE (0x103) if rejected.
+ */
 esp_err_t gate_command(gate_cmd_t cmd)
 {
-    /* Read current states based on diagram */
+    /* Read current positions and movement states to decide if the command is valid */
     gate_position_t current_pos = gate_get_position();
     bool is_opened = (current_pos == GATE_POS_OPEN);
     bool is_closed = (current_pos == GATE_POS_CLOSED);
@@ -425,9 +541,7 @@ esp_err_t gate_command(gate_cmd_t cmd)
     bool is_closing = (s_movement == GATE_MOVE_CLOSING || 
                        (s_state != GATE_STATE_IDLE && s_last_cmd == GATE_CMD_CLOSE));
 
-
-
-    /* Validate command transitions based on workflow diagram */
+    /* Validate command transitions based on workflow rules */
     if (cmd == GATE_CMD_OPEN) {
         if (is_opened || is_opening) {
             ESP_LOGW(TAG, "Open command rejected: already in opened/opening state");
@@ -629,15 +743,27 @@ static void notify_status(void)
  * --------------------------------------------------------------- */
 static void position_monitor_task(void *arg)
 {
+    /* Store the previous states so we only trigger callbacks on state transitions.
+     * Java equivalent: storing previous values in a state machine object to detect changes. */
     gate_position_t last_pos = gate_get_position();
     bool last_obstruction = gate_is_obstructed();
 
     ESP_LOGI(TAG, "Position monitor started — initial: %s, obstructed: %s",
              gate_get_position_string(), last_obstruction ? "YES" : "no");
 
+    /* Infinite loop for the background position monitor thread */
     for (;;) {
+        /* Sleep the thread for POSITION_POLL_MS (500 ms).
+         * Java equivalent: Thread.sleep(500);
+         * 
+         * Why are we polling instead of using hardware interrupts?
+         * Physical switches (magnetic reed/limit switches) suffer from "contact bounce" where they open 
+         * and close rapidly for a few milliseconds when triggered. Polling them at 500ms intervals acts 
+         * as a natural, software-based "debounce" filter and simplifies the circuit logic.
+         */
         vTaskDelay(pdMS_TO_TICKS(POSITION_POLL_MS));
 
+        /* Read the current electrical GPIO pin status */
         gate_position_t current_pos = gate_get_position();
         bool current_obstruction = gate_is_obstructed();
 
@@ -653,16 +779,19 @@ static void position_monitor_task(void *arg)
 
             last_pos = current_pos;
 
+            /* Fire the registered callback listener if it has been configured.
+             * Java equivalent: if (positionListener != null) { positionListener.onChanged(currentPos); } */
             if (s_position_cb) {
                 s_position_cb(current_pos);
             }
         }
 
-        /* --- 2. Movement tracking --- */
+        /* --- 2. Movement tracking ---
+         * If the gate is supposed to be moving (Opening/Closing), track its progress. */
         if (s_movement != GATE_MOVE_NONE) {
             bool reached_target = false;
 
-            /* Check if gate reached target position */
+            /* Check if gate reached the respective target limit switch */
             if (s_movement == GATE_MOVE_OPENING && current_pos == GATE_POS_OPEN) {
                 ESP_LOGI(TAG, "✓ Gate reached OPEN position");
                 s_movement = GATE_MOVE_NONE;
@@ -674,7 +803,8 @@ static void position_monitor_task(void *arg)
                 reached_target = true;
             }
 
-            /* Check for obstruction */
+            /* Obstruction safety check: if movement is active and safety sensor triggers,
+             * stop tracking immediately. The physical gate controller will reverse/stop the motor. */
             if (!reached_target && current_obstruction) {
                 ESP_LOGW(TAG, "⚠ Obstruction detected during movement!");
                 s_obstructed = true;
@@ -682,7 +812,8 @@ static void position_monitor_task(void *arg)
                 notify_status();
             }
 
-            /* Check for timeout */
+            /* Timeout check: if the gate has been moving longer than the safety limit (20s)
+             * without hitting the limit switch, declare a movement timeout. */
             if (!reached_target && s_movement != GATE_MOVE_NONE &&
                 xTaskGetTickCount() >= s_move_deadline) {
                 ESP_LOGW(TAG, "⚠ Movement timeout — gate did not reach target in %d ms",
@@ -692,7 +823,7 @@ static void position_monitor_task(void *arg)
                 notify_status();
             }
 
-            /* If target reached, clear any previous error/stopped flags */
+            /* If the gate successfully reached its end switch, clear any warning/stopped states */
             if (reached_target) {
                 s_obstructed = false;
                 s_timed_out = false;
@@ -701,14 +832,16 @@ static void position_monitor_task(void *arg)
             }
         }
 
-        /* --- 3. Obstruction change detection (independent of movement) --- */
+        /* --- 3. Obstruction change detection (independent of movement) ---
+         * This checks for the obstruction status changes to keep the phone app state up-to-date
+         * even when the gate is not actively commanded to move. */
         if (current_obstruction != last_obstruction) {
             ESP_LOGI(TAG, "Obstruction signal changed: %s → %s",
                      last_obstruction ? "ACTIVE" : "clear",
                      current_obstruction ? "ACTIVE" : "clear");
             last_obstruction = current_obstruction;
 
-            /* If obstruction just cleared, reset the flag */
+            /* If obstruction was cleared, update state */
             if (!current_obstruction && s_obstructed) {
                 s_obstructed = false;
                 notify_status();
