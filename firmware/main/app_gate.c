@@ -433,7 +433,11 @@ static void gate_task(void *arg)
         /* Cooldown finished: transition to IDLE and wait for next command */
         s_state = GATE_STATE_IDLE;
         ESP_LOGI(TAG, "Ready for next command");
-        notify/* ---------------------------------------------------------------
+        notify_status();
+    }
+}
+
+/* ---------------------------------------------------------------
  * Public API
  * --------------------------------------------------------------- */
 
