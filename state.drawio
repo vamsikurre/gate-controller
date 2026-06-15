@@ -232,13 +232,18 @@
             </Array>
           </mxGeometry>
         </mxCell>
+        <mxCell id="B8igc99SoODUJJHicgVq-1" value="closed/stopped" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="EGXXNeRHZrMVPiNJcSSs-5">
+          <mxGeometry x="-0.7714" y="4" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
         <mxCell id="EGXXNeRHZrMVPiNJcSSs-1" value="Close cmd" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fixedSize=1;" parent="1" vertex="1">
           <mxGeometry x="932" y="451" width="120" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="pRzT1YQKrzzQAC83TyRl-1" value="Cooldown of other commands was not honored by stop command" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+        <mxCell id="pRzT1YQKrzzQAC83TyRl-1" value="Cooldown of other commands was not honored by stop command" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" parent="1" vertex="1">
           <mxGeometry x="1163" y="104" width="214" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="pRzT1YQKrzzQAC83TyRl-2" value="There is a cooldown for each command, gate controller does not accept new commands for 1 second except for stop command" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" vertex="1" parent="1">
+        <mxCell id="pRzT1YQKrzzQAC83TyRl-2" value="There is a cooldown for each command, gate controller does not accept new commands for 1 second except for stop command" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" parent="1" vertex="1">
           <mxGeometry x="25" y="43" width="345" height="30" as="geometry" />
         </mxCell>
       </root>

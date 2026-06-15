@@ -175,6 +175,7 @@ static void gate_task(void *arg)
                 notify_status();
 
                 bool close_success = false;
+                bool interrupted_by_stop = false;
 
                 while (s_movement == GATE_MOVE_CLOSING) {
                     /* Check if a command is received in the queue (like STOP) */
@@ -184,6 +185,7 @@ static void gate_task(void *arg)
                             ESP_LOGI(TAG, "Close sequence during Partial Open interrupted by STOP");
                             cancel_movement_tracking();
                             s_stopped = true;
+                            interrupted_by_stop = true;
                             s_state = GATE_STATE_PULSING;
                             relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
                             break;
@@ -193,8 +195,8 @@ static void gate_task(void *arg)
                     }
                 }
 
-                /* Check if we reached closed successfully */
-                if (gate_get_position() == GATE_POS_CLOSED && !s_obstructed && !s_stopped) {
+                /* We proceed as long as there was no obstruction and the user did not command a stop */
+                if (!s_obstructed && !interrupted_by_stop) {
                     close_success = true;
                 }
 
@@ -208,8 +210,8 @@ static void gate_task(void *arg)
                     continue; // Skip the rest of the partial open sequence
                 }
 
-                /* Close succeeded, wait for cooldown before starting the open pulse */
-                ESP_LOGI(TAG, "Close sequence succeeded. Performing cooldown before partial open.");
+                /* Close completed (or timed out, which we allow), wait for cooldown before starting the open pulse */
+                ESP_LOGI(TAG, "Close sequence completed. Performing cooldown before partial open.");
                 s_state = GATE_STATE_COOLDOWN;
                 vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
 
@@ -219,6 +221,8 @@ static void gate_task(void *arg)
 
             /* --- Start the actual Partial Open sequence --- */
             ESP_LOGI(TAG, "=== PARTIAL OPEN sequence start ===");
+            s_stopped = false;
+            s_obstructed = false;
 
             /* Step 1: Pulse OPEN relay */
             s_state = GATE_STATE_PULSING;
@@ -418,8 +422,7 @@ esp_err_t gate_command(gate_cmd_t cmd)
     bool is_closing = (s_movement == GATE_MOVE_CLOSING || 
                        (s_state != GATE_STATE_IDLE && s_last_cmd == GATE_CMD_CLOSE));
 
-    bool is_stopped = s_stopped;
-    bool is_obstructed = s_obstructed;
+
 
     /* Validate command transitions based on workflow diagram */
     if (cmd == GATE_CMD_OPEN) {
@@ -440,12 +443,7 @@ esp_err_t gate_command(gate_cmd_t cmd)
             return ESP_ERR_INVALID_STATE;
         }
     }
-    else if (cmd == GATE_CMD_STOP) {
-        if (is_stopped || is_obstructed || is_opened || is_closed) {
-            ESP_LOGW(TAG, "Stop command rejected: already in stopped/obstructed/opened/closed state");
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
+
 
     /* Allow STOP even during pulsing, cooldown, or partial wait to ensure immediate response */
     if (s_state != GATE_STATE_IDLE && 
