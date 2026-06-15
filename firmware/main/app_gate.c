@@ -307,7 +307,41 @@ static void gate_task(void *arg)
         /* --- Cooldown period --- */
         s_state = GATE_STATE_COOLDOWN;
         ESP_LOGI(TAG, "Cooldown: %d ms", DEFAULT_COOLDOWN_MS);
-        vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
+
+        TickType_t cooldown_start = xTaskGetTickCount();
+        TickType_t cooldown_ticks = pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS);
+
+        while ((xTaskGetTickCount() - cooldown_start) < cooldown_ticks) {
+            TickType_t elapsed = xTaskGetTickCount() - cooldown_start;
+            if (elapsed >= cooldown_ticks) {
+                break;
+            }
+            TickType_t remaining = cooldown_ticks - elapsed;
+
+            gate_cmd_t pending_cmd;
+            if (xQueueReceive(s_cmd_queue, &pending_cmd, remaining) == pdTRUE) {
+                if (pending_cmd == GATE_CMD_STOP) {
+                    ESP_LOGI(TAG, "STOP command received during cooldown! Processing immediately.");
+                    /* Execute STOP logic immediately */
+                    cancel_movement_tracking();
+                    s_stopped = true;
+                    s_obstructed = false;
+                    s_timed_out = false;
+                    s_last_cmd = GATE_CMD_STOP;
+
+                    s_state = GATE_STATE_PULSING;
+                    relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
+                    notify_status();
+
+                    /* Reset cooldown for the STOP command */
+                    cooldown_start = xTaskGetTickCount();
+                    cooldown_ticks = pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS);
+                    s_state = GATE_STATE_COOLDOWN;
+                } else {
+                    ESP_LOGW(TAG, "Command %d rejected during active cooldown", pending_cmd);
+                }
+            }
+        }
 
         s_state = GATE_STATE_IDLE;
         ESP_LOGI(TAG, "Ready for next command");
@@ -413,9 +447,9 @@ esp_err_t gate_command(gate_cmd_t cmd)
         }
     }
 
-    /* Allow STOP even during movement tracking (but not during pulsing/cooldown) */
-    /* Also allow STOP during partial wait so we can interrupt it */
-    if (s_state != GATE_STATE_IDLE && !(cmd == GATE_CMD_STOP && s_state == GATE_STATE_PARTIAL_WAIT)) {
+    /* Allow STOP even during pulsing, cooldown, or partial wait to ensure immediate response */
+    if (s_state != GATE_STATE_IDLE && 
+        !(cmd == GATE_CMD_STOP && (s_state == GATE_STATE_PARTIAL_WAIT || s_state == GATE_STATE_COOLDOWN || s_state == GATE_STATE_PULSING))) {
         ESP_LOGW(TAG, "Command rejected — state machine busy (state=%d)", s_state);
         return ESP_ERR_INVALID_STATE;
     }
