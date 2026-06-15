@@ -157,17 +157,79 @@ static void gate_task(void *arg)
         s_last_cmd = cmd;
 
         if (cmd == GATE_CMD_PARTIAL_OPEN) {
-            /* --- Partial Open Sequence --- */
+            /* Check if already in closed state */
+            gate_position_t pos = gate_get_position();
+            if (pos != GATE_POS_CLOSED) {
+                /* Not closed: first run the Close sequence */
+                ESP_LOGI(TAG, "Gate not closed. Running CLOSE sequence first before partial open.");
+
+                /* Temporarily set last cmd to CLOSE so status reports "Closing" */
+                s_last_cmd = GATE_CMD_CLOSE;
+
+                /* Step A: Pulse CLOSE relay */
+                s_state = GATE_STATE_PULSING;
+                relay_pulse(GPIO_RELAY_CLOSE, cmd_to_pulse_ms(GATE_CMD_CLOSE));
+
+                /* Step B: Wait/track closing movement */
+                start_movement_tracking(GATE_MOVE_CLOSING);
+                notify_status();
+
+                bool close_success = false;
+
+                while (s_movement == GATE_MOVE_CLOSING) {
+                    /* Check if a command is received in the queue (like STOP) */
+                    gate_cmd_t next_cmd;
+                    if (xQueueReceive(s_cmd_queue, &next_cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        if (next_cmd == GATE_CMD_STOP) {
+                            ESP_LOGI(TAG, "Close sequence during Partial Open interrupted by STOP");
+                            cancel_movement_tracking();
+                            s_stopped = true;
+                            s_state = GATE_STATE_PULSING;
+                            relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
+                            break;
+                        } else {
+                            ESP_LOGW(TAG, "Unexpected command %d during partial close tracking", next_cmd);
+                        }
+                    }
+                }
+
+                /* Check if we reached closed successfully */
+                if (gate_get_position() == GATE_POS_CLOSED && !s_obstructed && !s_stopped) {
+                    close_success = true;
+                }
+
+                if (!close_success) {
+                    ESP_LOGW(TAG, "Close sequence before partial open failed or was interrupted. Aborting partial open.");
+                    /* Transition to cooldown then ready */
+                    s_state = GATE_STATE_COOLDOWN;
+                    vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
+                    s_state = GATE_STATE_IDLE;
+                    notify_status();
+                    continue; // Skip the rest of the partial open sequence
+                }
+
+                /* Close succeeded, wait for cooldown before starting the open pulse */
+                ESP_LOGI(TAG, "Close sequence succeeded. Performing cooldown before partial open.");
+                s_state = GATE_STATE_COOLDOWN;
+                vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
+
+                /* Restore last cmd to PARTIAL_OPEN */
+                s_last_cmd = GATE_CMD_PARTIAL_OPEN;
+            }
+
+            /* --- Start the actual Partial Open sequence --- */
             ESP_LOGI(TAG, "=== PARTIAL OPEN sequence start ===");
 
             /* Step 1: Pulse OPEN relay */
             s_state = GATE_STATE_PULSING;
             relay_pulse(GPIO_RELAY_OPEN, cmd_to_pulse_ms(GATE_CMD_OPEN));
+            notify_status();
 
             /* Step 2: Wait for the configured delay, but check if we get a STOP command or obstruction */
             s_state = GATE_STATE_PARTIAL_WAIT;
             ESP_LOGI(TAG, "Partial wait: %lu ms", (unsigned long)s_partial_delay_ms);
-            
+            notify_status();
+
             TickType_t start_tick = xTaskGetTickCount();
             TickType_t delay_ticks = pdMS_TO_TICKS(s_partial_delay_ms);
             bool interrupted = false;
@@ -339,8 +401,8 @@ esp_err_t gate_command(gate_cmd_t cmd)
         }
     }
     else if (cmd == GATE_CMD_PARTIAL_OPEN) {
-        if (is_opened || is_opening) {
-            ESP_LOGW(TAG, "Partial Open command rejected: already in opened/opening state");
+        if (is_opening) {
+            ESP_LOGW(TAG, "Partial Open command rejected: already in opening state");
             return ESP_ERR_INVALID_STATE;
         }
     }
