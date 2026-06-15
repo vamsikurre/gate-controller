@@ -231,12 +231,17 @@ static esp_rmaker_device_t *create_gate_device(void)
         PROP_FLAG_READ);
     esp_rmaker_device_add_param(device, status_param);
 
-    /* ---- Open Button ---- */
+    /* ---- Open Button (Primary Parameter) ----
+     * We assign the Open button as the primary parameter of the device.
+     * This registers Open as the main control (showing a shortcut on the app's home dashboard)
+     * and prevents the app from defaulting to the Status string parameter as the primary,
+     * which would display a text-edit button next to it. */
     esp_rmaker_param_t *open_param = esp_rmaker_param_create(
         PARAM_OPEN, NULL, esp_rmaker_bool(false),
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(open_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, open_param);
+    esp_rmaker_device_assign_primary_param(device, open_param);
 
     /* ---- Close Button ---- */
     esp_rmaker_param_t *close_param = esp_rmaker_param_create(
@@ -276,10 +281,11 @@ static void build_status_string(char *buf, size_t len)
 
     if (obstructed) {
         snprintf(buf, len, "⚠ Obstructed! · %s", pos);
-    } else if (strcmp(status, "Stopped") == 0) {
-        snprintf(buf, len, "Stopped");
     } else {
-        snprintf(buf, len, "%s · %s", status, pos);
+        /* Print the gate status string directly. The gate status string already
+         * includes ' · Partial' suffix during the partial open sequence, but remains
+         * clean 'Opening' or 'Closing' for standard operations. */
+        snprintf(buf, len, "%s", status);
     }
 }
 

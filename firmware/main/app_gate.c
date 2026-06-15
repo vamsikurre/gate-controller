@@ -65,6 +65,7 @@ static TickType_t       s_move_deadline = 0;
 static bool             s_obstructed  = false;
 static bool             s_timed_out   = false;
 static bool             s_stopped     = false;
+static bool             s_in_partial_sequence = false;
 
 /* Configurable timing (can be changed at runtime via RainMaker) */
 static uint32_t s_pulse_duration_ms  = DEFAULT_PULSE_OPEN_MS;
@@ -203,6 +204,9 @@ static void gate_task(void *arg)
          * partially. It only aborts on physical obstruction or STOP command.
          * ================================================================= */
         if (cmd == GATE_CMD_PARTIAL_OPEN) {
+            /* Enable partial open sequence flag so status reports correct suffixes */
+            s_in_partial_sequence = true;
+
             /* Read current physical position of the gate from the limit switches */
             gate_position_t pos = gate_get_position();
             if (pos != GATE_POS_CLOSED) {
@@ -263,6 +267,7 @@ static void gate_task(void *arg)
                     s_state = GATE_STATE_COOLDOWN;
                     vTaskDelay(pdMS_TO_TICKS(DEFAULT_COOLDOWN_MS));
                     s_state = GATE_STATE_IDLE;
+                    s_in_partial_sequence = false;
                     notify_status();
                     continue; /* Jump back to the top of the event loop */
                 }
@@ -344,6 +349,8 @@ static void gate_task(void *arg)
                 s_state = GATE_STATE_PULSING;
                 relay_pulse(GPIO_RELAY_STOP, DEFAULT_PULSE_STOP_MS);
             }
+
+            s_in_partial_sequence = false;
             notify_status();
 
             ESP_LOGI(TAG, "=== PARTIAL OPEN sequence complete ===");
@@ -354,6 +361,7 @@ static void gate_task(void *arg)
          * ================================================================= */
         else if (cmd == GATE_CMD_STOP) {
             ESP_LOGI(TAG, "Command: STOP");
+            s_in_partial_sequence = false;
 
             /* Cancel active movement tracking (opening/closing monitoring thread is stopped) */
             cancel_movement_tracking();
@@ -499,10 +507,10 @@ esp_err_t gate_init(void)
      * Task properties:
      * - gate_task: function pointer containing the run-loop code.
      * - "gate_task": thread label for debugging.
-     * - 4096: Stack size in bytes.
+     * - 8192: Stack size in bytes.
      * - 5: Priority (higher priority runs first; 5 is relatively high).
      */
-    BaseType_t ret = xTaskCreate(gate_task, "gate_task", 4096, NULL, 5, NULL);
+    BaseType_t ret = xTaskCreate(gate_task, "gate_task", 8192, NULL, 5, NULL);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create gate task");
         return ESP_FAIL;
@@ -510,7 +518,7 @@ esp_err_t gate_init(void)
 
     /* Create the position & movement monitor task (polls limit switches every 500ms)
      * Java equivalent: ScheduledExecutorService or another background Thread. */
-    ret = xTaskCreate(position_monitor_task, "pos_task", 2048, NULL, 4, NULL);
+    ret = xTaskCreate(position_monitor_task, "pos_task", 8192, NULL, 4, NULL);
     if (ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to create position monitor task");
     }
@@ -607,6 +615,16 @@ const char *gate_get_status_string(void)
     /* Priority 1: Obstruction detected */
     if (s_obstructed) {
         return "Obstructed";
+    }
+
+    /* Priority 1.5: Partial Open sequence active */
+    if (s_in_partial_sequence) {
+        if (s_last_cmd == GATE_CMD_CLOSE) {
+            return "Closing · Partial";
+        }
+        if (s_last_cmd == GATE_CMD_PARTIAL_OPEN) {
+            return "Opening · Partial";
+        }
     }
 
     /* Priority 2: Actively pulsing / cooldown / partial wait */
