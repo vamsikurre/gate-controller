@@ -86,6 +86,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include <esp_mac.h>
 
 /* ESP RainMaker headers */
 #include <esp_rmaker_core.h>
@@ -213,10 +214,10 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
  *       ├── Stop          (push button)
  *       └── Partial Open  (push button)
  * --------------------------------------------------------------- */
-static esp_rmaker_device_t *create_gate_device(void)
+static esp_rmaker_device_t *create_gate_device(const char *device_name)
 {
     /* Create a custom device (NULL type = generic/custom) */
-    esp_rmaker_device_t *device = esp_rmaker_device_create(DEVICE_NAME, NULL, NULL);
+    esp_rmaker_device_t *device = esp_rmaker_device_create(device_name, NULL, NULL);
     if (device == NULL) {
         ESP_LOGE(TAG, "Failed to create device");
         return NULL;
@@ -227,7 +228,7 @@ static esp_rmaker_device_t *create_gate_device(void)
 
     /* ---- Status Text (read-only, non-editable) ---- */
     esp_rmaker_param_t *status_param = esp_rmaker_param_create(
-        PARAM_STATUS, NULL, esp_rmaker_str("Idle"),
+        PARAM_STATUS, ESP_RMAKER_PARAM_OTA_STATUS, esp_rmaker_str("Idle"),
         PROP_FLAG_READ);
     esp_rmaker_device_add_param(device, status_param);
 
@@ -376,14 +377,22 @@ void app_main(void)
         .enable_time_sync = true,   /* Sync time from cloud for timestamps */
     };
 
-    esp_rmaker_node_t *node = esp_rmaker_node_init(&rainmaker_cfg, NODE_NAME, NODE_TYPE);
+    /* Get unique MAC address to generate unique node and device names */
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char unique_device_name[32];
+    char unique_node_name[32];
+    snprintf(unique_device_name, sizeof(unique_device_name), "Sliding Gate - %02X%02X", mac[4], mac[5]);
+    snprintf(unique_node_name, sizeof(unique_node_name), "Gate Controller - %02X%02X", mac[4], mac[5]);
+
+    esp_rmaker_node_t *node = esp_rmaker_node_init(&rainmaker_cfg, unique_node_name, NODE_TYPE);
     if (node == NULL) {
         ESP_LOGE(TAG, "Failed to init RainMaker node — aborting");
         abort();
     }
 
     /* Create our gate device with all parameters */
-    s_gate_device = create_gate_device();
+    s_gate_device = create_gate_device(unique_device_name);
     if (s_gate_device == NULL) {
         ESP_LOGE(TAG, "Failed to create gate device — aborting");
         abort();

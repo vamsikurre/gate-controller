@@ -103,27 +103,9 @@ extern "C" {
 /* Gate position polling interval */
 #define POSITION_POLL_MS        500   /* Check limit switches every 500ms */
 
-/* ---------------------------------------------------------------
- * Gate Selection Config
- * ---------------------------------------------------------------
- * To flash multiple gate controllers under the same RainMaker account,
- * configure a unique ID for each target board before building:
- *   1 = Front Gate
- *   2 = Back Gate
- * --------------------------------------------------------------- */
-#define TARGET_GATE_ID    1   /* Set to 1 for Front Gate, 2 for Back Gate */
-
-#if TARGET_GATE_ID == 1
-  #define DEVICE_NAME             "Front Gate"
-  #define NODE_NAME               "Front Gate Controller"
-#elif TARGET_GATE_ID == 2
-  #define DEVICE_NAME             "Back Gate"
-  #define NODE_NAME               "Back Gate Controller"
-#else
-  #define DEVICE_NAME             "Sliding Gate"
-  #define NODE_NAME               "Gate Controller"
-#endif
-
+/* RainMaker device/node names */
+#define DEVICE_NAME             "Sliding Gate"
+#define NODE_NAME               "Gate Controller"
 #define NODE_TYPE               "Gate Opener"
 
 /* ---------------------------------------------------------------
