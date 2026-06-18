@@ -321,6 +321,7 @@ ESP32 Relay Board                     Gate Controller Terminal Strip
 4. Test safety: rapid-fire commands → verify cooldown rejection
 5. Test partial open → verify open-wait-stop sequence
 6. Test OTA: push a minor version update from RainMaker dashboard
+7. Test Remote Diagnostics: verify serial log prints "ESP Insights diagnostics initialized successfully" and check for diagnostic graphs on the ESP RainMaker Dashboard (e.g. heap metrics, Wi-Fi metrics).
 
 ### Phase 3 — Integration
 1. Wire relays to controller with gate powered off

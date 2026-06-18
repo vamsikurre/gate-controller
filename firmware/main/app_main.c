@@ -87,6 +87,11 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include <esp_mac.h>
+#include "nvs.h"
+#include <esp_timer.h>
+#include <esp_rmaker_utils.h>
+#include <esp_insights.h>
+#include <esp_diagnostics.h>
 
 /* ESP RainMaker headers */
 #include <esp_rmaker_core.h>
@@ -95,6 +100,8 @@
 #include <esp_rmaker_ota.h>
 #include <esp_rmaker_schedule.h>
 #include <esp_rmaker_scenes.h>
+#include <esp_rmaker_common_events.h>
+#include <esp_rmaker_mqtt.h>
 
 /* Network provisioning helper (from espressif/rmaker_app_network component) */
 #include <network_provisioning/manager.h>
@@ -109,6 +116,76 @@ static const char *TAG = "app_main";
 /* Global handle to the device — needed to update params from gate callbacks */
 static esp_rmaker_device_t *s_gate_device = NULL;
 
+#define BOOT_COUNT_NAMESPACE "storage"
+#define BOOT_COUNT_KEY       "boot_count"
+#define BOOT_COUNT_RESET_S   5
+
+static esp_timer_handle_t s_boot_count_timer = NULL;
+
+static void reset_boot_count_cb(void *arg)
+{
+    nvs_handle_t handle;
+    if (nvs_open(BOOT_COUNT_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, BOOT_COUNT_KEY, 0);
+        nvs_commit(handle);
+        nvs_close(handle);
+        ESP_LOGI(TAG, "Stable running state reached. Boot count reset to 0.");
+    }
+}
+
+static void check_rapid_power_cycle(void)
+{
+    nvs_handle_t handle;
+    uint8_t boot_count = 0;
+
+    esp_err_t err = nvs_open(BOOT_COUNT_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS storage namespace for boot count");
+        return;
+    }
+
+    err = nvs_get_u8(handle, BOOT_COUNT_KEY, &boot_count);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        boot_count = 0;
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error reading boot count from NVS: %s", esp_err_to_name(err));
+        nvs_close(handle);
+        return;
+    }
+
+    boot_count++;
+    ESP_LOGI(TAG, "Boot count: %d", boot_count);
+
+    if (boot_count >= 3) {
+        ESP_LOGW(TAG, "Rapid power-cycle detected (3x)! Triggering Wi-Fi credentials reset...");
+        nvs_set_u8(handle, BOOT_COUNT_KEY, 0);
+        nvs_commit(handle);
+        nvs_close(handle);
+
+        /* Reset Wi-Fi credentials (clears SSID/pass and reboots the chip) */
+        esp_rmaker_wifi_reset(0, 0);
+        return;
+    }
+
+    nvs_set_u8(handle, BOOT_COUNT_KEY, boot_count);
+    nvs_commit(handle);
+    nvs_close(handle);
+
+    /* Start a 5-second timer to reset the boot count to 0 if we run stably */
+    esp_timer_create_args_t timer_args = {
+        .callback = reset_boot_count_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "boot_count_reset_tm"
+    };
+
+    if (esp_timer_create(&timer_args, &s_boot_count_timer) == ESP_OK) {
+        esp_timer_start_once(s_boot_count_timer, BOOT_COUNT_RESET_S * 1000000ULL);
+        ESP_LOGI(TAG, "Started %d-second timer to reset boot count.", BOOT_COUNT_RESET_S);
+    } else {
+        ESP_LOGE(TAG, "Failed to create boot count reset timer.");
+    }
+}
 /* ---------------------------------------------------------------
  * write_cb — RainMaker Write Callback
  * ---------------------------------------------------------------
@@ -281,7 +358,11 @@ static void build_status_string(char *buf, size_t len)
     bool obstructed = gate_is_obstructed();
 
     if (obstructed) {
-        snprintf(buf, len, "⚠ Obstructed! · %s", pos);
+        if (strcmp(pos, "Partial") == 0) {
+            snprintf(buf, len, "⚠ Obstructed!");
+        } else {
+            snprintf(buf, len, "⚠ Obstructed! · %s", pos);
+        }
     } else {
         /* Print the gate status string directly. The gate status string already
          * includes ' · Partial' suffix during the partial open sequence, but remains
@@ -370,6 +451,9 @@ void app_main(void)
      * It does NOT connect yet — that happens in app_network_start(). */
     app_network_init();
 
+    /* Check for rapid power-cycle to reset Wi-Fi credentials */
+    check_rapid_power_cycle();
+
     /* ---- Step 4: RainMaker Node ----
      * A "node" is the top-level container for your ESP32 in the RainMaker
      * cloud. Each node can have multiple "devices" (we have one: the gate). */
@@ -425,6 +509,18 @@ void app_main(void)
      * e.g., "Night Mode" = Close gate + turn off lights */
     esp_rmaker_scenes_enable();
 
+    /* Initialize ESP Insights remote diagnostics over HTTPS using the user's Auth Key */
+    esp_insights_config_t insights_cfg = {
+        .log_type = ESP_DIAG_LOG_TYPE_ERROR | ESP_DIAG_LOG_TYPE_WARNING,
+        .auth_key = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiR29vZ2xlX1BhblBSR1A3ZzNYTDNjRUtROEpzcEQiLCJpc3MiOiJlMzIyYjU5Yy02M2NjLTRlNDAtOGVhMi00ZTc3NjY1NDVjY2EiLCJzdWIiOiJhNTQ2YWRhZC1lNzJiLTQwNTktYmQ2OS1jZDdlMjI0MjZiMmIiLCJleHAiOjIwOTcwNTU4MjgsImlhdCI6MTc4MTY5NTgyOH0.ov9MfxOvJKHnvudy5G3xg26gzAsqnH8-QoppswhEIr17hQScNa2zjqpSQjQA6C5-jXKysTXShyONDaUxXwMCr2P_1nmdS6YeNBkJUGAUU3VGSa8qGwzeZPQPfXPs-ISJ8OGIdVaP3_GQB4DIXXpKuanft45htByv09zNGUcJwLXWDw-LKevG2emfphyg2qIqcxqqdT0Nme3cwTaSkI0O2CTyF3BsMNTAdL3qbjybO67uUhiC3vSd5JAyorqprLX1NKJ5WnLaedTypmFoVr3wxgQ-c3zQ8V258lIyT47pvHGKBSku8mrAzKN33yQqqx_TY_WjA3dKiREdTsKuy6KkMA",
+    };
+    esp_err_t insights_err = esp_insights_init(&insights_cfg);
+    if (insights_err == ESP_OK) {
+        ESP_LOGI(TAG, "ESP Insights diagnostics initialized successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize ESP Insights: %s", esp_err_to_name(insights_err));
+    }
+
     /* ---- Step 6: Start RainMaker ----
      * This starts the MQTT connection to the RainMaker cloud.
      * If this is the first boot, it waits for provisioning first. */
@@ -449,7 +545,10 @@ void app_main(void)
      * BOOT BUTTON RESETS:
      * - Hold 3s  → clears Wi-Fi creds, re-enters provisioning
      * - Hold 10s → full factory reset (clears everything) */
-    err = app_network_start(POP_TYPE_RANDOM);
+    /* Set custom static Proof of Possession (PoP) so we can pair manually
+     * without needing to view the serial console log for a random PIN. */
+    app_network_set_custom_pop("gate1234");
+    err = app_network_start(POP_TYPE_CUSTOM);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "app_network_start failed: %s", esp_err_to_name(err));
     }
