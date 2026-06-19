@@ -555,6 +555,9 @@ void app_main(void)
      * e.g., "Close gate at 10:00 PM every day" */
     esp_rmaker_schedule_enable();
 
+    /* Timezone Service: allows timezone updates from the cloud/mobile app to sync with the device */
+    esp_rmaker_timezone_service_enable();
+
     /* Scenes: allows grouping multiple actions
      * e.g., "Night Mode" = Close gate + turn off lights */
     esp_rmaker_scenes_enable();
