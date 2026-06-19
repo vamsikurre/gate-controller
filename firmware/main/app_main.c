@@ -90,8 +90,11 @@
 #include "nvs.h"
 #include <esp_timer.h>
 #include <esp_rmaker_utils.h>
+#if CONFIG_ESP_INSIGHTS_ENABLED
 #include <esp_insights.h>
 #include <esp_diagnostics.h>
+#endif
+
 
 /* ESP RainMaker headers */
 #include <esp_rmaker_core.h>
@@ -562,6 +565,7 @@ void app_main(void)
      * e.g., "Night Mode" = Close gate + turn off lights */
     esp_rmaker_scenes_enable();
 
+#if CONFIG_ESP_INSIGHTS_ENABLED
     /* Initialize ESP Insights remote diagnostics over HTTPS using the user's Auth Key */
     esp_insights_config_t insights_cfg = {
         .log_type = ESP_DIAG_LOG_TYPE_ERROR | ESP_DIAG_LOG_TYPE_WARNING,
@@ -573,6 +577,8 @@ void app_main(void)
     } else {
         ESP_LOGE(TAG, "Failed to initialize ESP Insights: %s", esp_err_to_name(insights_err));
     }
+#endif
+
 
     /* ---- Step 6: Start RainMaker ----
      * This starts the MQTT connection to the RainMaker cloud.
