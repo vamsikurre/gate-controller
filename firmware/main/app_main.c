@@ -233,8 +233,13 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
      * (bool, int, float, string) to share the same memory location to save RAM.
      * Here, `.b` reads the boolean representation of the parameter value.
      */
-    if (strcmp(param_name, PARAM_OPEN) == 0 && val.val.b) {
-        err = gate_command(GATE_CMD_OPEN);
+    if (strcmp(param_name, PARAM_OPEN) == 0) {
+        if (val.val.b) {
+            err = gate_command(GATE_CMD_OPEN);
+        } else {
+            /* Alexa "turn off" sends Open/Power=false → close the gate */
+            err = gate_command(GATE_CMD_CLOSE);
+        }
     }
     else if (strcmp(param_name, PARAM_CLOSE) == 0 && val.val.b) {
         err = gate_command(GATE_CMD_CLOSE);
@@ -250,8 +255,26 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
 
     /* Update status and report button state back to cloud */
     if (err == ESP_OK) {
-        /* Reset the toggle back to false (it's a momentary trigger, not a latch) */
-        esp_rmaker_param_update_and_report(param, esp_rmaker_bool(false));
+        /* For the Open/Power param, keep the value reflecting gate direction so
+         * Alexa shows "On" when opening and "Off" when closing.
+         * For all other trigger params (Close/Stop/Partial Open), reset to false. */
+        if (strcmp(param_name, PARAM_OPEN) == 0) {
+            esp_rmaker_param_update_and_report(param, esp_rmaker_bool(val.val.b));
+        } else {
+            esp_rmaker_param_update_and_report(param, esp_rmaker_bool(false));
+
+            /* When Close or Stop is triggered directly (not via Open=false),
+             * also set the power param to false so Alexa shows "Off". */
+            if (strcmp(param_name, PARAM_CLOSE) == 0 ||
+                strcmp(param_name, PARAM_STOP) == 0) {
+                esp_rmaker_param_t *open_param = esp_rmaker_device_get_param_by_name(
+                    s_gate_device, PARAM_OPEN);
+                if (open_param) {
+                    esp_rmaker_param_update_and_report(open_param,
+                        esp_rmaker_bool(false));
+                }
+            }
+        }
 
         /* Update the status text */
         const char *status = gate_get_status_string();
@@ -269,8 +292,15 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
             esp_rmaker_param_update_and_report(status_param,
                 esp_rmaker_str("Busy — wait for cooldown"));
         }
-        /* Reset toggle back to false */
-        esp_rmaker_param_update_and_report(param, esp_rmaker_bool(false));
+        /* For the Open/Power param, report actual gate position so Alexa stays accurate.
+         * For other trigger params, just reset to false. */
+        if (strcmp(param_name, PARAM_OPEN) == 0) {
+            gate_position_t pos = gate_get_position();
+            esp_rmaker_param_update_and_report(param,
+                esp_rmaker_bool(pos == GATE_POS_OPEN));
+        } else {
+            esp_rmaker_param_update_and_report(param, esp_rmaker_bool(false));
+        }
     }
 
     return ESP_OK;
@@ -294,7 +324,9 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
 static esp_rmaker_device_t *create_gate_device(const char *device_name)
 {
     /* Create a custom device (NULL type = generic/custom) */
-    esp_rmaker_device_t *device = esp_rmaker_device_create(device_name, NULL, NULL);
+    /* Use standard Switch type so Alexa can discover this device.
+     * Custom/NULL types are invisible to Alexa's device discovery. */
+    esp_rmaker_device_t *device = esp_rmaker_device_create(device_name, ESP_RMAKER_DEVICE_SWITCH, NULL);
     if (device == NULL) {
         ESP_LOGE(TAG, "Failed to create device");
         return NULL;
@@ -315,7 +347,7 @@ static esp_rmaker_device_t *create_gate_device(const char *device_name)
      * and prevents the app from defaulting to the Status string parameter as the primary,
      * which would display a text-edit button next to it. */
     esp_rmaker_param_t *open_param = esp_rmaker_param_create(
-        PARAM_OPEN, NULL, esp_rmaker_bool(false),
+        PARAM_OPEN, ESP_RMAKER_PARAM_POWER, esp_rmaker_bool(false),
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(open_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, open_param);
@@ -323,21 +355,21 @@ static esp_rmaker_device_t *create_gate_device(const char *device_name)
 
     /* ---- Close Button ---- */
     esp_rmaker_param_t *close_param = esp_rmaker_param_create(
-        PARAM_CLOSE, NULL, esp_rmaker_bool(false),
+        PARAM_CLOSE, ESP_RMAKER_PARAM_TOGGLE, esp_rmaker_bool(false),
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(close_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, close_param);
 
     /* ---- Stop Button ---- */
     esp_rmaker_param_t *stop_param = esp_rmaker_param_create(
-        PARAM_STOP, NULL, esp_rmaker_bool(false),
+        PARAM_STOP, ESP_RMAKER_PARAM_TOGGLE, esp_rmaker_bool(false),
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(stop_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, stop_param);
 
     /* ---- Partial Open Button ---- */
     esp_rmaker_param_t *partial_param = esp_rmaker_param_create(
-        PARAM_PARTIAL_OPEN, NULL, esp_rmaker_bool(false),
+        PARAM_PARTIAL_OPEN, ESP_RMAKER_PARAM_TOGGLE, esp_rmaker_bool(false),
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(partial_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, partial_param);
@@ -385,6 +417,24 @@ static void update_status_in_app(void)
         if (status_param) {
             esp_rmaker_param_update_and_report(status_param,
                 esp_rmaker_str(status_buf));
+        }
+
+        /* Sync Open/Power param with actual gate position for Alexa.
+         * Only update when the gate reaches a definitive position (limit switch).
+         * For intermediate positions (PARTIAL/UNKNOWN), keep the last command's
+         * value to avoid flickering during movement. */
+        esp_rmaker_param_t *open_param = esp_rmaker_device_get_param_by_name(
+            s_gate_device, PARAM_OPEN);
+        if (open_param) {
+            gate_position_t pos = gate_get_position();
+            if (pos == GATE_POS_OPEN) {
+                esp_rmaker_param_update_and_report(open_param,
+                    esp_rmaker_bool(true));
+            } else if (pos == GATE_POS_CLOSED) {
+                esp_rmaker_param_update_and_report(open_param,
+                    esp_rmaker_bool(false));
+            }
+            /* PARTIAL/UNKNOWN: don't update — avoids flickering during movement */
         }
     }
 }
