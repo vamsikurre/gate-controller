@@ -244,13 +244,13 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
             err = gate_command(GATE_CMD_CLOSE);
         }
     }
-    else if (strcmp(param_name, PARAM_CLOSE) == 0 && val.val.b) {
+    else if (strcmp(param_name, PARAM_CLOSE) == 0) {
         err = gate_command(GATE_CMD_CLOSE);
     }
-    else if (strcmp(param_name, PARAM_STOP) == 0 && val.val.b) {
+    else if (strcmp(param_name, PARAM_STOP) == 0) {
         err = gate_command(GATE_CMD_STOP);
     }
-    else if (strcmp(param_name, PARAM_PARTIAL_OPEN) == 0 && val.val.b) {
+    else if (strcmp(param_name, PARAM_PARTIAL_OPEN) == 0) {
         err = gate_command(GATE_CMD_PARTIAL_OPEN);
     }
     /* ---- Configuration params removed from UI ---- */
