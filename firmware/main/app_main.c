@@ -519,8 +519,17 @@ void app_main(void)
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char unique_device_name[32];
     char unique_node_name[32];
-    snprintf(unique_device_name, sizeof(unique_device_name), "Sliding Gate - %02X%02X", mac[4], mac[5]);
-    snprintf(unique_node_name, sizeof(unique_node_name), "Gate Controller - %02X%02X", mac[4], mac[5]);
+    if (mac[4] == 0x3A && mac[5] == 0xAC) {
+        snprintf(unique_device_name, sizeof(unique_device_name), "Front Gate");
+        snprintf(unique_node_name, sizeof(unique_node_name), "Front Gate Controller");
+    } else if (mac[4] == 0x37 && mac[5] == 0x5C) {
+        snprintf(unique_device_name, sizeof(unique_device_name), "Back Gate");
+        snprintf(unique_node_name, sizeof(unique_node_name), "Back Gate Controller");
+    } else {
+        // Fallback name mapping for any future boards
+        snprintf(unique_device_name, sizeof(unique_device_name), "Sliding Gate - %02X%02X", mac[4], mac[5]);
+        snprintf(unique_node_name, sizeof(unique_node_name), "Gate Controller - %02X%02X", mac[4], mac[5]);
+    }
 
     esp_rmaker_node_t *node = esp_rmaker_node_init(&rainmaker_cfg, unique_node_name, NODE_TYPE);
     if (node == NULL) {
