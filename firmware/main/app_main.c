@@ -90,6 +90,8 @@
 #include "nvs.h"
 #include <esp_timer.h>
 #include <esp_rmaker_utils.h>
+#include "esp_wifi.h"
+#include "esp_event.h"
 #if CONFIG_ESP_INSIGHTS_ENABLED
 #include <esp_insights.h>
 #include <esp_diagnostics.h>
@@ -136,15 +138,48 @@ static void reset_boot_count_cb(void *arg)
     }
 }
 
+#define WIFI_BACKUP_KEY      "wifi_backup"
+#define PROV_TRIGGERED_KEY   "prov_triggered"
+
 static void check_rapid_power_cycle(void)
 {
     nvs_handle_t handle;
     uint8_t boot_count = 0;
+    uint8_t prov_triggered = 0;
 
     esp_err_t err = nvs_open(BOOT_COUNT_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open NVS storage namespace for boot count");
         return;
+    }
+
+    /* Check if provisioning mode was just triggered on the last boot */
+    err = nvs_get_u8(handle, PROV_TRIGGERED_KEY, &prov_triggered);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        prov_triggered = 0;
+    }
+
+    if (prov_triggered == 1) {
+        ESP_LOGI(TAG, "Provisioning mode was triggered on last boot. Clearing triggered flag.");
+        nvs_set_u8(handle, PROV_TRIGGERED_KEY, 0);
+        nvs_commit(handle);
+        /* Do NOT restore the backup now; we want to stay in provisioning mode for this boot */
+    } else {
+        /* If provisioning wasn't just triggered, check if we have a backup to restore */
+        wifi_config_t backup_cfg;
+        size_t size = sizeof(wifi_config_t);
+        err = nvs_get_blob(handle, WIFI_BACKUP_KEY, &backup_cfg, &size);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Normal boot detected. Restoring backed up Wi-Fi credentials...");
+            esp_err_t set_err = esp_wifi_set_config(WIFI_IF_STA, &backup_cfg);
+            if (set_err == ESP_OK) {
+                ESP_LOGI(TAG, "Wi-Fi credentials restored successfully.");
+            } else {
+                ESP_LOGE(TAG, "Failed to set restored Wi-Fi config: %s", esp_err_to_name(set_err));
+            }
+            nvs_erase_key(handle, WIFI_BACKUP_KEY);
+            nvs_commit(handle);
+        }
     }
 
     err = nvs_get_u8(handle, BOOT_COUNT_KEY, &boot_count);
@@ -160,12 +195,29 @@ static void check_rapid_power_cycle(void)
     ESP_LOGI(TAG, "Boot count: %d", boot_count);
 
     if (boot_count >= 3) {
-        ESP_LOGW(TAG, "Rapid power-cycle detected (3x)! Triggering Wi-Fi credentials reset...");
+        ESP_LOGW(TAG, "Rapid power-cycle detected (3x)! Checking if we need to back up credentials...");
+
+        wifi_config_t wifi_cfg;
+        err = esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg);
+        if (err == ESP_OK && strlen((char *)wifi_cfg.sta.ssid) > 0) {
+            ESP_LOGI(TAG, "Backing up existing Wi-Fi credentials for SSID: %s", wifi_cfg.sta.ssid);
+            err = nvs_set_blob(handle, WIFI_BACKUP_KEY, &wifi_cfg, sizeof(wifi_config_t));
+            if (err == ESP_OK) {
+                nvs_set_u8(handle, PROV_TRIGGERED_KEY, 1);
+                ESP_LOGI(TAG, "Credentials backed up and provisioning triggered flag set.");
+            } else {
+                ESP_LOGE(TAG, "Failed to back up credentials: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGI(TAG, "No existing Wi-Fi credentials found to back up.");
+        }
+
         nvs_set_u8(handle, BOOT_COUNT_KEY, 0);
         nvs_commit(handle);
         nvs_close(handle);
 
         /* Reset Wi-Fi credentials (clears SSID/pass and reboots the chip) */
+        ESP_LOGI(TAG, "Resetting Wi-Fi credentials and rebooting...");
         esp_rmaker_wifi_reset(0, 0);
         return;
     }
@@ -460,6 +512,20 @@ static void on_gate_status_changed(const char *status)
     update_status_in_app();
 }
 
+static void app_prov_ip_event_handler(void* arg, esp_event_base_t event_base,
+                                      int32_t event_id, void* event_data)
+{
+    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        nvs_handle_t handle;
+        if (nvs_open(BOOT_COUNT_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+            nvs_erase_key(handle, WIFI_BACKUP_KEY);
+            nvs_commit(handle);
+            nvs_close(handle);
+            ESP_LOGI(TAG, "Successfully connected to Wi-Fi. Cleared backup credentials.");
+        }
+    }
+}
+
 /* ---------------------------------------------------------------
  * app_main — Application Entry Point
  * ---------------------------------------------------------------
@@ -493,6 +559,9 @@ void app_main(void)
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    /* Register event handler for IP_EVENT_STA_GOT_IP to clean up any backup credentials */
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &app_prov_ip_event_handler, NULL);
 
     /* ---- Step 2: Gate Control ----
      * Initialise GPIOs and create the relay control task.
