@@ -10,3 +10,4 @@ firmware/managed_components/
 .idea/
 .DS_Store
 Thumbs.db
+.$state.drawio.bkp

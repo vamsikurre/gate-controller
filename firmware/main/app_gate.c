@@ -85,6 +85,7 @@ static gate_status_cb_t   s_status_cb   = NULL;
 /* Forward declarations */
 static void position_monitor_task(void *arg);
 static void notify_status(void);
+static void relay_watchdog_task(void *arg);
 
 /* ---------------------------------------------------------------
  * GPIO helpers
@@ -471,8 +472,8 @@ esp_err_t gate_init(void)
     for (int i = 0; i < sizeof(relay_gpios) / sizeof(relay_gpios[0]); i++) {
         /* Reset and initialize the GPIO pin */
         gpio_reset_pin(relay_gpios[i]);
-        /* Set direction as OUTPUT (we write to relays) */
-        gpio_set_direction(relay_gpios[i], GPIO_MODE_OUTPUT);
+        /* Set direction as INPUT_OUTPUT so we can read the level back in the watchdog task */
+        gpio_set_direction(relay_gpios[i], GPIO_MODE_INPUT_OUTPUT);
         /* Force pin to HIGH (RELAY_OFF = 1) at boot to prevent relays from pulsing on power-up */
         gpio_set_level(relay_gpios[i], RELAY_OFF);
     }
@@ -521,6 +522,13 @@ esp_err_t gate_init(void)
     ret = xTaskCreate(position_monitor_task, "pos_task", 8192, NULL, 4, NULL);
     if (ret != pdPASS) {
         ESP_LOGW(TAG, "Failed to create position monitor task");
+    }
+
+    /* Create the relay safety watchdog task (high priority 5) */
+    ret = xTaskCreate(relay_watchdog_task, "relay_wd", 4096, NULL, 5, NULL);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create relay safety watchdog task");
+        return ESP_FAIL;
     }
 
     s_state = GATE_STATE_IDLE;
@@ -654,18 +662,18 @@ const char *gate_get_status_string(void)
         return "Closing";
     }
 
-    /* Priority 4: Stopped flag */
-    if (s_stopped) {
-        return "Stopped";
-    }
-
-    /* Priority 5: Limit switches */
+    /* Priority 4: Limit switches */
     gate_position_t pos = gate_get_position();
     if (pos == GATE_POS_OPEN) {
         return "Opened";
     }
     if (pos == GATE_POS_CLOSED) {
         return "Closed";
+    }
+
+    /* Priority 5: Stopped flag */
+    if (s_stopped) {
+        return "Stopped";
     }
 
     /* Priority 6: Default fallback (Idle/Stopped) */
@@ -765,10 +773,13 @@ static void notify_status(void)
  * --------------------------------------------------------------- */
 static void position_monitor_task(void *arg)
 {
-    /* Store the previous states so we only trigger callbacks on state transitions.
-     * Java equivalent: storing previous values in a state machine object to detect changes. */
-    gate_position_t last_pos = gate_get_position();
-    bool last_obstruction = gate_is_obstructed();
+    /* Give the optocouplers and GPIO lines 200ms to stabilize at power-up */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Initialize last_pos to GATE_POS_UNKNOWN to force an initial sync of the
+     * true gate position with the RainMaker app on the first run. */
+    gate_position_t last_pos = GATE_POS_UNKNOWN;
+    bool last_obstruction = !gate_is_obstructed();
 
     ESP_LOGI(TAG, "Position monitor started — initial: %s, obstructed: %s",
              gate_get_position_string(), last_obstruction ? "YES" : "no");
@@ -867,6 +878,40 @@ static void position_monitor_task(void *arg)
             if (!current_obstruction && s_obstructed) {
                 s_obstructed = false;
                 notify_status();
+            }
+        }
+    }
+}
+
+/* ---------------------------------------------------------------
+ * Relay Safety Watchdog Task
+ * ---------------------------------------------------------------
+ * Monitored relays are forced OFF if they remain active (LOW)
+ * for more than 2 seconds, preventing hardware/motor damage 
+ * in the event of a software crash or deadlock.
+ * --------------------------------------------------------------- */
+static void relay_watchdog_task(void *arg)
+{
+    const int gpios[] = { GPIO_RELAY_OPEN, GPIO_RELAY_CLOSE, GPIO_RELAY_STOP, GPIO_RELAY_SPARE };
+    const int num_gpios = sizeof(gpios) / sizeof(gpios[0]);
+    uint32_t active_duration_ms[sizeof(gpios) / sizeof(gpios[0])] = {0};
+
+    ESP_LOGI(TAG, "Relay safety watchdog task started");
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(100)); /* Poll every 100ms */
+
+        for (int i = 0; i < num_gpios; i++) {
+            if (gpio_get_level(gpios[i]) == RELAY_ON) {
+                active_duration_ms[i] += 100;
+                if (active_duration_ms[i] >= 2000) { /* 2 seconds threshold */
+                    ESP_LOGE(TAG, "!!! SAFETY WATCHDOG TRIGGERED !!! Relay GPIO %d active for %lu ms. Forcing OFF!",
+                             gpios[i], (unsigned long)active_duration_ms[i]);
+                    gpio_set_level(gpios[i], RELAY_OFF);
+                    active_duration_ms[i] = 0;
+                }
+            } else {
+                active_duration_ms[i] = 0;
             }
         }
     }
