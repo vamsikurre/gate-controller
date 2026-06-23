@@ -11,3 +11,4 @@ firmware/managed_components/
 .DS_Store
 Thumbs.db
 .$state.drawio.bkp
+.$state.drawio.dtmp
