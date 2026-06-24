@@ -499,8 +499,11 @@ static void update_status_in_app(void)
         }
 
         /* Update companion contact sensor state.
-         * The user wants the light ON (sensor = false/Open) when opening, closing, or opened.
-         * The light should be OFF (sensor = true/Closed) when closed, stopped, or obstructed. */
+         * In Alexa/RainMaker:
+         *   - true (DETECTED) = Open (contact broken -> Light ON)
+         *   - false (NOT_DETECTED) = Closed (contact detected -> Light OFF)
+         * We report true (Open) when the gate is opening, closing, or opened,
+         * and false (Closed) when closed, stopped, or obstructed. */
         if (s_sensor_device) {
             esp_rmaker_param_t *detect_param = esp_rmaker_device_get_param_by_name(
                 s_sensor_device, PARAM_DETECTION_STATE);
@@ -510,9 +513,10 @@ static void update_status_in_app(void)
                                      strcmp(status, "Opening") == 0 ||
                                      strcmp(status, "Opening · Partial") == 0 ||
                                      strcmp(status, "Closing") == 0 ||
-                                     strcmp(status, "Closing · Partial") == 0);
+                                     strcmp(status, "Closing · Partial") == 0 ||
+                                     strcmp(status, "Obstructed") == 0);
                 esp_rmaker_param_update_and_report(detect_param,
-                    esp_rmaker_bool(!is_on_state));
+                    esp_rmaker_bool(is_on_state));
             }
         }
     }
