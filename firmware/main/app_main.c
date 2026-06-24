@@ -120,6 +120,7 @@ static const char *TAG = "app_main";
 
 /* Global handle to the device — needed to update params from gate callbacks */
 static esp_rmaker_device_t *s_gate_device = NULL;
+static esp_rmaker_device_t *s_sensor_device = NULL;
 
 #define BOOT_COUNT_NAMESPACE "storage"
 #define BOOT_COUNT_KEY       "boot_count"
@@ -474,22 +475,45 @@ static void update_status_in_app(void)
                 esp_rmaker_str(status_buf));
         }
 
-        /* Sync Open/Power param with actual gate position for Alexa.
-         * Only update when the gate reaches a definitive position (limit switch).
-         * For intermediate positions (PARTIAL/UNKNOWN), keep the last command's
-         * value to avoid flickering during movement. */
+        /* Sync Open/Power param with actual gate position/movement for Alexa.
+         * While actively moving, report the target state of the movement (true for opening, false for closing)
+         * to prevent the state from jumping back due to the initial limit switch trigger.
+         * When stationary, sync with the definitive limit switch positions (Open or Closed). */
         esp_rmaker_param_t *open_param = esp_rmaker_device_get_param_by_name(
             s_gate_device, PARAM_OPEN);
         if (open_param) {
-            gate_position_t pos = gate_get_position();
-            if (pos == GATE_POS_OPEN) {
-                esp_rmaker_param_update_and_report(open_param,
-                    esp_rmaker_bool(true));
-            } else if (pos == GATE_POS_CLOSED) {
-                esp_rmaker_param_update_and_report(open_param,
-                    esp_rmaker_bool(false));
+            gate_movement_t movement = gate_get_movement();
+            gate_state_t state = gate_get_state();
+            if (movement == GATE_MOVE_OPENING) {
+                esp_rmaker_param_update_and_report(open_param, esp_rmaker_bool(true));
+            } else if (movement == GATE_MOVE_CLOSING) {
+                esp_rmaker_param_update_and_report(open_param, esp_rmaker_bool(false));
+            } else if (movement == GATE_MOVE_NONE && state == GATE_STATE_IDLE) {
+                gate_position_t pos = gate_get_position();
+                if (pos == GATE_POS_OPEN) {
+                    esp_rmaker_param_update_and_report(open_param, esp_rmaker_bool(true));
+                } else if (pos == GATE_POS_CLOSED) {
+                    esp_rmaker_param_update_and_report(open_param, esp_rmaker_bool(false));
+                }
             }
-            /* PARTIAL/UNKNOWN: don't update — avoids flickering during movement */
+        }
+
+        /* Update companion contact sensor state.
+         * The user wants the light ON (sensor = false/Open) when opening, closing, or opened.
+         * The light should be OFF (sensor = true/Closed) when closed, stopped, or obstructed. */
+        if (s_sensor_device) {
+            esp_rmaker_param_t *detect_param = esp_rmaker_device_get_param_by_name(
+                s_sensor_device, PARAM_DETECTION_STATE);
+            if (detect_param) {
+                const char *status = gate_get_status_string();
+                bool is_on_state = (strcmp(status, "Opened") == 0 ||
+                                     strcmp(status, "Opening") == 0 ||
+                                     strcmp(status, "Opening · Partial") == 0 ||
+                                     strcmp(status, "Closing") == 0 ||
+                                     strcmp(status, "Closing · Partial") == 0);
+                esp_rmaker_param_update_and_report(detect_param,
+                    esp_rmaker_bool(!is_on_state));
+            }
         }
     }
 }
@@ -588,16 +612,20 @@ void app_main(void)
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char unique_device_name[32];
     char unique_node_name[32];
+    char unique_sensor_name[32];
     if (mac[4] == 0x3A && mac[5] == 0xAC) {
         snprintf(unique_device_name, sizeof(unique_device_name), "Front Gate");
         snprintf(unique_node_name, sizeof(unique_node_name), "Front Gate Controller");
+        snprintf(unique_sensor_name, sizeof(unique_sensor_name), "Front Gate Sensor");
     } else if (mac[4] == 0x37 && mac[5] == 0x5C) {
         snprintf(unique_device_name, sizeof(unique_device_name), "Back Gate");
         snprintf(unique_node_name, sizeof(unique_node_name), "Back Gate Controller");
+        snprintf(unique_sensor_name, sizeof(unique_sensor_name), "Back Gate Sensor");
     } else {
         // Fallback name mapping for any future boards
         snprintf(unique_device_name, sizeof(unique_device_name), "Sliding Gate - %02X%02X", mac[4], mac[5]);
         snprintf(unique_node_name, sizeof(unique_node_name), "Gate Controller - %02X%02X", mac[4], mac[5]);
+        snprintf(unique_sensor_name, sizeof(unique_sensor_name), "Gate Sensor - %02X%02X", mac[4], mac[5]);
     }
 
     esp_rmaker_node_t *node = esp_rmaker_node_init(&rainmaker_cfg, unique_node_name, NODE_TYPE);
@@ -615,6 +643,26 @@ void app_main(void)
 
     /* Add the device to the node */
     esp_rmaker_node_add_device(node, s_gate_device);
+
+    /* Create companion Contact Sensor device */
+    s_sensor_device = esp_rmaker_device_create(unique_sensor_name, "esp.device.contact-sensor", NULL);
+    if (s_sensor_device == NULL) {
+        ESP_LOGE(TAG, "Failed to create contact sensor device — aborting");
+        abort();
+    }
+
+    esp_rmaker_param_t *detect_param = esp_rmaker_param_create(
+        PARAM_DETECTION_STATE, "esp.param.contact-detection-state",
+        esp_rmaker_bool(true), PROP_FLAG_READ);
+    if (detect_param == NULL) {
+        ESP_LOGE(TAG, "Failed to create contact detection state parameter");
+    } else {
+        esp_rmaker_param_add_ui_type(detect_param, ESP_RMAKER_UI_TOGGLE);
+        esp_rmaker_device_add_param(s_sensor_device, detect_param);
+    }
+
+    /* Add the sensor device to the node */
+    esp_rmaker_node_add_device(node, s_sensor_device);
 
     /* Register callbacks for live app updates */
     gate_set_position_callback(on_gate_position_changed);

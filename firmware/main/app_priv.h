@@ -99,6 +99,8 @@ extern "C" {
 #define PARAM_OBSTRUCTION       "Obstruction"
 #define PARAM_PULSE_DURATION    "Pulse Duration"
 #define PARAM_PARTIAL_DELAY     "Partial Delay"
+#define DEVICE_SENSOR_NAME      "Gate Sensor"
+#define PARAM_DETECTION_STATE   "Detection State"
 
 /* Gate position polling interval */
 #define POSITION_POLL_MS        500   /* Check limit switches every 500ms */
