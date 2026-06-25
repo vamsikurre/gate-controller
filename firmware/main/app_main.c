@@ -95,8 +95,6 @@
 #if CONFIG_ESP_INSIGHTS_ENABLED
 #include <esp_insights.h>
 #include <esp_diagnostics.h>
-#include <esp_diagnostics_metrics.h>
-#include <esp_diagnostics_variables.h>
 #endif
 
 
@@ -699,9 +697,6 @@ void app_main(void)
     esp_err_t insights_err = esp_insights_init(&insights_cfg);
     if (insights_err == ESP_OK) {
         ESP_LOGI(TAG, "ESP Insights diagnostics initialized successfully");
-        esp_diag_heap_metrics_init();
-        esp_diag_wifi_metrics_init();
-        esp_diag_variables_init();
     } else {
         ESP_LOGE(TAG, "Failed to initialize ESP Insights: %s", esp_err_to_name(insights_err));
     }
