@@ -56,10 +56,10 @@ The optocoupler inverts the logic level (5V active-HIGH input becomes 0V active-
 
 | Gate Condition | Controller Terminal | Opto LED | ESP32 GPIO (with Internal Pull-up) | GPIO Level | Firmware Interpretation |
 |---|---|---|---|---|---|
-| **Fully Open** | `Hi` = 5V | ON | GPIO 13 | **LOW (0)** | `GATE_POS_OPEN` ✓ |
-| **Moving / Closed** | `Hi` = 0V | OFF | GPIO 13 | **HIGH (1)** | Not open ✓ |
-| **Fully Closed** | `CL` = 5V | ON | GPIO 14 | **LOW (0)** | `GATE_POS_CLOSED` ✓ |
-| **Moving / Open** | `CL` = 0V | OFF | GPIO 14 | **HIGH (1)** | Not closed ✓ |
+| **Fully Open** | `CL` = 5V | ON | GPIO 14 | **LOW (0)** | `GATE_POS_OPEN` ✓ |
+| **Moving / Closed** | `CL` = 0V | OFF | GPIO 14 | **HIGH (1)** | Not open ✓ |
+| **Fully Closed** | `Hi` = 5V | ON | GPIO 13 | **LOW (0)** | `GATE_POS_CLOSED` ✓ |
+| **Moving / Open** | `Hi` = 0V | OFF | GPIO 13 | **HIGH (1)** | Not closed ✓ |
 | **Obstructed** | `INFR` = 5V | ON | GPIO 27 | **LOW (0)** | `gate_is_obstructed() = true` ✓ |
 | **Clear** | `INFR` = 0V | OFF | GPIO 27 | **HIGH (1)** | `gate_is_obstructed() = false` ✓ |
 

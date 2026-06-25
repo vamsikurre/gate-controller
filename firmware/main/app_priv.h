@@ -45,8 +45,8 @@ extern "C" {
  *       If controller puts >3.3V on these terminals, use an
  *       optocoupler for isolation instead of direct connection.
  * --------------------------------------------------------------- */
-#define GPIO_LIMIT_OPEN     13   /* Input: OP terminal → HIGH=moving, LOW=fully open  */
-#define GPIO_LIMIT_CLOSE    14   /* Input: CL terminal → HIGH=moving, LOW=fully closed */
+#define GPIO_LIMIT_OPEN     14   /* Input: CL terminal → HIGH=moving, LOW=fully open  */
+#define GPIO_LIMIT_CLOSE    13   /* Input: OP/Hi terminal → HIGH=moving, LOW=fully closed */
 
 /* ---------------------------------------------------------------
  * Obstruction / Interference Detection
