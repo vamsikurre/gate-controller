@@ -341,13 +341,6 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
         }
     } else if (err == ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "Command rejected — gate is busy");
-        /* Report "Busy" status to the app */
-        esp_rmaker_param_t *status_param = esp_rmaker_device_get_param_by_name(
-            s_gate_device, PARAM_STATUS);
-        if (status_param) {
-            esp_rmaker_param_update_and_report(status_param,
-                esp_rmaker_str("Busy — wait for cooldown"));
-        }
         /* For the Open/Power param, report actual gate position so Alexa stays accurate.
          * For other trigger params, just reset to false. */
         if (strcmp(param_name, PARAM_OPEN) == 0) {
