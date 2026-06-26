@@ -35,8 +35,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_system.h"
 
 #include "app_priv.h"
 #include "app_gate.h"
@@ -779,7 +779,7 @@ static void position_monitor_task(void *arg)
     /* Initialize last_pos to GATE_POS_UNKNOWN to force an initial sync of the
      * true gate position with the RainMaker app on the first run. */
     gate_position_t last_pos = GATE_POS_UNKNOWN;
-    bool last_obstruction = !gate_is_obstructed();
+    bool last_obstruction = gate_is_obstructed();
 
     ESP_LOGI(TAG, "Position monitor started — initial: %s, obstructed: %s",
              gate_get_position_string(), last_obstruction ? "YES" : "no");
@@ -845,10 +845,8 @@ static void position_monitor_task(void *arg)
                 notify_status();
             }
 
-            /* Timeout check: if the gate has been moving longer than the safety limit (20s)
-             * without hitting the limit switch, declare a movement timeout. */
             if (!reached_target && s_movement != GATE_MOVE_NONE &&
-                xTaskGetTickCount() >= s_move_deadline) {
+                ((int32_t)(xTaskGetTickCount() - s_move_deadline) >= 0)) {
                 ESP_LOGW(TAG, "⚠ Movement timeout — gate did not reach target in %d ms",
                          GATE_MOVE_TIMEOUT_MS);
                 s_stopped = true;
@@ -908,6 +906,12 @@ static void relay_watchdog_task(void *arg)
                     ESP_LOGE(TAG, "!!! SAFETY WATCHDOG TRIGGERED !!! Relay GPIO %d active for %lu ms. Forcing OFF!",
                              gpios[i], (unsigned long)active_duration_ms[i]);
                     gpio_set_level(gpios[i], RELAY_OFF);
+                    vTaskDelay(pdMS_TO_TICKS(10)); /* Settle time */
+                    if (gpio_get_level(gpios[i]) == RELAY_ON) {
+                        ESP_LOGE(TAG, "!!! CRITICAL HARDWARE FAULT !!! Relay GPIO %d failed to turn OFF! Rebooting system...", gpios[i]);
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        esp_restart();
+                    }
                     active_duration_ms[i] = 0;
                 }
             } else {
