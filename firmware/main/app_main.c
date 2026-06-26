@@ -693,6 +693,7 @@ void app_main(void)
     esp_insights_config_t insights_cfg = {
         .log_type = ESP_DIAG_LOG_TYPE_ERROR | ESP_DIAG_LOG_TYPE_WARNING,
         .auth_key = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiR29vZ2xlX1BhblBSR1A3ZzNYTDNjRUtROEpzcEQiLCJpc3MiOiJlMzIyYjU5Yy02M2NjLTRlNDAtOGVhMi00ZTc3NjY1NDVjY2EiLCJzdWIiOiJhNTQ2YWRhZC1lNzJiLTQwNTktYmQ2OS1jZDdlMjI0MjZiMmIiLCJleHAiOjIwOTcwNTU4MjgsImlhdCI6MTc4MTY5NTgyOH0.ov9MfxOvJKHnvudy5G3xg26gzAsqnH8-QoppswhEIr17hQScNa2zjqpSQjQA6C5-jXKysTXShyONDaUxXwMCr2P_1nmdS6YeNBkJUGAUU3VGSa8qGwzeZPQPfXPs-ISJ8OGIdVaP3_GQB4DIXXpKuanft45htByv09zNGUcJwLXWDw-LKevG2emfphyg2qIqcxqqdT0Nme3cwTaSkI0O2CTyF3BsMNTAdL3qbjybO67uUhiC3vSd5JAyorqprLX1NKJ5WnLaedTypmFoVr3wxgQ-c3zQ8V258lIyT47pvHGKBSku8mrAzKN33yQqqx_TY_WjA3dKiREdTsKuy6KkMA",
+        .node_id = esp_rmaker_get_node_id(),
     };
     esp_err_t insights_err = esp_insights_init(&insights_cfg);
     if (insights_err == ESP_OK) {
