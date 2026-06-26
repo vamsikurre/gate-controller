@@ -67,6 +67,7 @@ static bool             s_obstructed  = false;
 static bool             s_timed_out   = false;
 static bool             s_stopped     = false;
 static bool             s_in_partial_sequence = false;
+static gate_position_t  s_latched_position = GATE_POS_UNKNOWN;
 
 /* Configurable timing (can be changed at runtime via RainMaker) */
 static uint32_t s_pulse_duration_ms  = DEFAULT_PULSE_OPEN_MS;
@@ -87,6 +88,7 @@ static gate_status_cb_t   s_status_cb   = NULL;
 static void position_monitor_task(void *arg);
 static void notify_status(void);
 static void relay_watchdog_task(void *arg);
+static gate_position_t read_raw_position(void);
 
 /* ---------------------------------------------------------------
  * GPIO helpers
@@ -149,6 +151,15 @@ static void start_movement_tracking(gate_movement_t movement)
     s_move_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(GATE_MOVE_TIMEOUT_MS);
     s_obstructed = false;
     s_timed_out = false;
+
+    if (s_latched_position != GATE_POS_PARTIAL) {
+        s_latched_position = GATE_POS_PARTIAL;
+        ESP_LOGI(TAG, "Movement started, clearing latched position to PARTIAL");
+        if (s_position_cb) {
+            s_position_cb(s_latched_position);
+        }
+    }
+
     ESP_LOGI(TAG, "Movement tracking: %s (timeout %d ms)",
              movement == GATE_MOVE_OPENING ? "OPENING" : "CLOSING",
              GATE_MOVE_TIMEOUT_MS);
@@ -532,6 +543,7 @@ esp_err_t gate_init(void)
         return ESP_FAIL;
     }
 
+    s_latched_position = read_raw_position();
     s_state = GATE_STATE_IDLE;
     ESP_LOGI(TAG, "Gate control initialised — all relays OFF, position: %s",
              gate_get_position_string());
@@ -703,6 +715,11 @@ void gate_set_partial_delay(uint32_t ms)
 
 gate_position_t gate_get_position(void)
 {
+    return s_latched_position;
+}
+
+static gate_position_t read_raw_position(void)
+{
     int op = gpio_get_level(GPIO_LIMIT_OPEN);
     int cl = gpio_get_level(GPIO_LIMIT_CLOSE);
 
@@ -711,9 +728,9 @@ gate_position_t gate_get_position(void)
     } else if (op == 1 && cl == 0) {
         return GATE_POS_CLOSED;     /* CL switch triggered */
     } else if (op == 1 && cl == 1) {
-        return GATE_POS_PARTIAL;    /* Neither triggered — moving or partial */
+        return GATE_POS_PARTIAL;    /* Neither triggered */
     } else {
-        return GATE_POS_UNKNOWN;    /* Both triggered — shouldn't happen */
+        return GATE_POS_UNKNOWN;    /* Both triggered */
     }
 }
 
@@ -771,7 +788,6 @@ static void notify_status(void)
  *    - "Opening" until OP limit switch triggers or 10s timeout
  *    - "Closing" until CL limit switch triggers or 10s timeout
  * 3. Detect obstruction signal
- * --------------------------------------------------------------- */
 static void position_monitor_task(void *arg)
 {
     /* Give the optocouplers and GPIO lines 200ms to stabilize at power-up */
@@ -787,51 +803,55 @@ static void position_monitor_task(void *arg)
 
     /* Infinite loop for the background position monitor thread */
     for (;;) {
-        /* Sleep the thread for POSITION_POLL_MS (500 ms).
-         * Java equivalent: Thread.sleep(500);
-         * 
-         * Why are we polling instead of using hardware interrupts?
-         * Physical switches (magnetic reed/limit switches) suffer from "contact bounce" where they open 
-         * and close rapidly for a few milliseconds when triggered. Polling them at 500ms intervals acts 
-         * as a natural, software-based "debounce" filter and simplifies the circuit logic.
-         */
+        /* Sleep the thread for POSITION_POLL_MS (50 ms). */
         vTaskDelay(pdMS_TO_TICKS(POSITION_POLL_MS));
 
         /* Read the current electrical GPIO pin status */
-        gate_position_t current_pos = gate_get_position();
+        gate_position_t raw_pos = read_raw_position();
         bool current_obstruction = gate_is_obstructed();
 
-        /* --- 1. Position change detection --- */
-        if (current_pos != last_pos) {
+        /* --- 1. Latching raw limit switch hits --- */
+        if (raw_pos == GATE_POS_OPEN) {
+            if (s_movement != GATE_MOVE_CLOSING) {
+                s_latched_position = GATE_POS_OPEN;
+            }
+        }
+        else if (raw_pos == GATE_POS_CLOSED) {
+            if (s_movement != GATE_MOVE_OPENING) {
+                s_latched_position = GATE_POS_CLOSED;
+            }
+        }
+
+        /* --- 2. Position change detection --- */
+        if (s_latched_position != last_pos) {
             ESP_LOGI(TAG, "Position changed: %s → %s",
                      last_pos == GATE_POS_OPEN    ? "Open" :
                      last_pos == GATE_POS_CLOSED   ? "Closed" :
                      last_pos == GATE_POS_PARTIAL  ? "Partial" : "Unknown",
-                     current_pos == GATE_POS_OPEN   ? "Open" :
-                     current_pos == GATE_POS_CLOSED ? "Closed" :
-                     current_pos == GATE_POS_PARTIAL ? "Partial" : "Unknown");
+                     s_latched_position == GATE_POS_OPEN   ? "Open" :
+                     s_latched_position == GATE_POS_CLOSED ? "Closed" :
+                     s_latched_position == GATE_POS_PARTIAL ? "Partial" : "Unknown");
 
-            last_pos = current_pos;
+            last_pos = s_latched_position;
 
-            /* Fire the registered callback listener if it has been configured.
-             * Java equivalent: if (positionListener != null) { positionListener.onChanged(currentPos); } */
+            /* Fire the registered callback listener if it has been configured. */
             if (s_position_cb) {
-                s_position_cb(current_pos);
+                s_position_cb(s_latched_position);
             }
         }
 
-        /* --- 2. Movement tracking ---
+        /* --- 3. Movement tracking ---
          * If the gate is supposed to be moving (Opening/Closing), track its progress. */
         if (s_movement != GATE_MOVE_NONE) {
             bool reached_target = false;
 
-            /* Check if gate reached the respective target limit switch */
-            if (s_movement == GATE_MOVE_OPENING && current_pos == GATE_POS_OPEN) {
+            /* Check if gate reached the respective target limit switch using latched position */
+            if (s_movement == GATE_MOVE_OPENING && s_latched_position == GATE_POS_OPEN) {
                 ESP_LOGI(TAG, "✓ Gate reached OPEN position");
                 s_movement = GATE_MOVE_NONE;
                 reached_target = true;
             }
-            else if (s_movement == GATE_MOVE_CLOSING && current_pos == GATE_POS_CLOSED) {
+            else if (s_movement == GATE_MOVE_CLOSING && s_latched_position == GATE_POS_CLOSED) {
                 ESP_LOGI(TAG, "✓ Gate reached CLOSED position");
                 s_movement = GATE_MOVE_NONE;
                 reached_target = true;
@@ -864,9 +884,7 @@ static void position_monitor_task(void *arg)
             }
         }
 
-        /* --- 3. Obstruction change detection (independent of movement) ---
-         * This checks for the obstruction status changes to keep the phone app state up-to-date
-         * even when the gate is not actively commanded to move. */
+        /* --- 4. Obstruction change detection (independent of movement) --- */
         if (current_obstruction != last_obstruction) {
             ESP_LOGI(TAG, "Obstruction signal changed: %s → %s",
                      last_obstruction ? "ACTIVE" : "clear",
@@ -881,7 +899,6 @@ static void position_monitor_task(void *arg)
         }
     }
 }
-
 /* ---------------------------------------------------------------
  * Relay Safety Watchdog Task
  * ---------------------------------------------------------------

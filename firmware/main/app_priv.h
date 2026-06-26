@@ -103,7 +103,7 @@ extern "C" {
 #define PARAM_DETECTION_STATE   "Detection State"
 
 /* Gate position polling interval */
-#define POSITION_POLL_MS        500   /* Check limit switches every 500ms */
+#define POSITION_POLL_MS        50   /* Check limit switches every 50ms */
 
 /* RainMaker device/node names */
 #define DEVICE_NAME             "Sliding Gate"
