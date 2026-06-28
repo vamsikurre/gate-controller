@@ -788,6 +788,7 @@ static void notify_status(void)
  *    - "Opening" until OP limit switch triggers or 10s timeout
  *    - "Closing" until CL limit switch triggers or 10s timeout
  * 3. Detect obstruction signal
+ * --------------------------------------------------------------- */
 static void position_monitor_task(void *arg)
 {
     /* Give the optocouplers and GPIO lines 200ms to stabilize at power-up */
