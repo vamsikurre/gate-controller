@@ -561,11 +561,6 @@ esp_err_t gate_init(void)
  */
 esp_err_t gate_command(gate_cmd_t cmd)
 {
-    /* Read current positions and movement states to decide if the command is valid */
-    gate_position_t current_pos = gate_get_position();
-    bool is_opened = (current_pos == GATE_POS_OPEN);
-    bool is_closed = (current_pos == GATE_POS_CLOSED);
-    
     bool is_opening = (s_movement == GATE_MOVE_OPENING || 
                        s_state == GATE_STATE_PARTIAL_WAIT ||
                        (s_state != GATE_STATE_IDLE && 
@@ -576,14 +571,14 @@ esp_err_t gate_command(gate_cmd_t cmd)
 
     /* Validate command transitions based on workflow rules */
     if (cmd == GATE_CMD_OPEN) {
-        if (is_opened || is_opening) {
-            ESP_LOGW(TAG, "Open command rejected: already in opened/opening state");
+        if (is_opening) {
+            ESP_LOGW(TAG, "Open command rejected: already in opening state");
             return ESP_ERR_INVALID_STATE;
         }
     }
     else if (cmd == GATE_CMD_CLOSE) {
-        if (is_closed || is_closing) {
-            ESP_LOGW(TAG, "Close command rejected: already in closed/closing state");
+        if (is_closing) {
+            ESP_LOGW(TAG, "Close command rejected: already in closing state");
             return ESP_ERR_INVALID_STATE;
         }
     }
