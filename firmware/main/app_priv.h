@@ -81,8 +81,8 @@ extern "C" {
 #define DEFAULT_PULSE_CLOSE_MS     500
 #define DEFAULT_PULSE_STOP_MS      500
 #define DEFAULT_COOLDOWN_MS       1000
-#define DEFAULT_PARTIAL_DELAY_MS  5000
-#define GATE_MOVE_TIMEOUT_MS     20000  /* 20s: max time to wait for gate to reach position */
+#define DEFAULT_PARTIAL_DELAY_MS  4000
+#define GATE_MOVE_TIMEOUT_MS     25000  /* 25s: max time to wait for gate to reach position */
 
 /* ---------------------------------------------------------------
  * RainMaker Parameter Names
