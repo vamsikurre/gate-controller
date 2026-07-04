@@ -41,6 +41,7 @@
 
 #include "app_priv.h"
 #include "app_gate.h"
+#include <esp_rmaker_core.h>
 
 static const char *TAG = "gate";
 
@@ -484,27 +485,27 @@ esp_err_t gate_init(void)
     for (int i = 0; i < sizeof(relay_gpios) / sizeof(relay_gpios[0]); i++) {
         /* Reset and initialize the GPIO pin */
         gpio_reset_pin(relay_gpios[i]);
+        /* Force pin to HIGH (RELAY_OFF = 1) BEFORE setting direction to prevent relays from pulsing at boot */
+        gpio_set_level(relay_gpios[i], RELAY_OFF);
         /* Set direction as INPUT_OUTPUT so we can read the level back in the watchdog task */
         gpio_set_direction(relay_gpios[i], GPIO_MODE_INPUT_OUTPUT);
-        /* Force pin to HIGH (RELAY_OFF = 1) at boot to prevent relays from pulsing on power-up */
-        gpio_set_level(relay_gpios[i], RELAY_OFF);
     }
 
-    /* Configure limit switch GPIOs as inputs with internal pull-ups
+    /* Configure limit switch and BOOT button GPIOs as inputs with internal pull-ups
      *
      * Why PULL-UP?
      * The limit switches are dry contacts. When open, the line "floats" and would give random noise.
      * Enabling the internal pull-up resistor pulls the pin to 3.3V (HIGH / 1) by default.
      * When the gate reaches the limit and hits the switch, the contact shorts the pin to GND (LOW / 0).
      */
-    const int input_gpios[] = { GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION };
+    const int input_gpios[] = { GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION, GPIO_BOOT_BUTTON };
     for (int i = 0; i < sizeof(input_gpios) / sizeof(input_gpios[0]); i++) {
         gpio_reset_pin(input_gpios[i]);
         gpio_set_direction(input_gpios[i], GPIO_MODE_INPUT);
         gpio_set_pull_mode(input_gpios[i], GPIO_PULLUP_ONLY);
     }
-    ESP_LOGI(TAG, "Inputs configured: OP=GPIO%d, CL=GPIO%d, OBSTRUCTION=GPIO%d",
-             GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION);
+    ESP_LOGI(TAG, "Inputs configured: OP=GPIO%d, CL=GPIO%d, OBSTRUCTION=GPIO%d, BOOT=GPIO%d",
+             GPIO_LIMIT_OPEN, GPIO_LIMIT_CLOSE, GPIO_OBSTRUCTION, GPIO_BOOT_BUTTON);
 
     /* Create command queue (depth 1 = reject if already processing a command)
      * Java equivalent: s_cmd_queue = new ArrayBlockingQueue<>(1); */
@@ -892,6 +893,22 @@ static void position_monitor_task(void *arg)
                 s_obstructed = false;
                 notify_status();
             }
+        }
+
+        /* --- 5. Boot button reset check --- */
+        static uint32_t boot_button_held_ms = 0;
+        if (gpio_get_level(GPIO_BOOT_BUTTON) == 0) {
+            boot_button_held_ms += POSITION_POLL_MS;
+            if (boot_button_held_ms == WIFI_RESET_HOLD_SEC * 1000) {
+                ESP_LOGW(TAG, "BOOT button held for %d seconds. Resetting Wi-Fi credentials...", WIFI_RESET_HOLD_SEC);
+                esp_rmaker_wifi_reset(0, 0);
+            }
+            else if (boot_button_held_ms == FACTORY_RESET_HOLD_SEC * 1000) {
+                ESP_LOGE(TAG, "BOOT button held for %d seconds. Performing Factory Reset...", FACTORY_RESET_HOLD_SEC);
+                esp_rmaker_factory_reset(0, 0);
+            }
+        } else {
+            boot_button_held_ms = 0;
         }
     }
 }

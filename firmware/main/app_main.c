@@ -631,6 +631,10 @@ void app_main(void)
         abort();
     }
 
+    /* Tag node with custom attributes for dashboard grouping and OTA targeting */
+    esp_rmaker_node_add_attribute(node, "Project", "Gate Controller");
+    esp_rmaker_node_add_attribute(node, "Device Type", "Gate Controller");
+
     /* Create our gate device with all parameters */
     s_gate_device = create_gate_device(unique_device_name);
     if (s_gate_device == NULL) {
