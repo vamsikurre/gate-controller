@@ -501,15 +501,8 @@ static void update_status_in_app(void)
             esp_rmaker_param_t *detect_param = esp_rmaker_device_get_param_by_name(
                 s_sensor_device, PARAM_DETECTION_STATE);
             if (detect_param) {
-                const char *status = gate_get_status_string();
-                bool is_on_state = (strcmp(status, "Opened") == 0 ||
-                                     strcmp(status, "Opening") == 0 ||
-                                     strcmp(status, "Opening · Partial") == 0 ||
-                                     strcmp(status, "Closing") == 0 ||
-                                     strcmp(status, "Closing · Partial") == 0 ||
-                                     strcmp(status, "Obstructed") == 0);
                 esp_rmaker_param_update_and_report(detect_param,
-                    esp_rmaker_bool(is_on_state));
+                    esp_rmaker_bool(gate_is_contact_open()));
             }
         }
     }
@@ -693,10 +686,13 @@ void app_main(void)
     esp_rmaker_scenes_enable();
 
 #if CONFIG_ESP_INSIGHTS_ENABLED
-    /* Initialize ESP Insights remote diagnostics over HTTPS using the user's Auth Key */
+    /* Initialize ESP Insights remote diagnostics over HTTPS.
+     * WARNING: Do NOT hardcode auth keys in source control.
+     * Obtain your key from: https://dashboard.insights.espressif.com
+     * and set it here or via a build-time config variable. */
     esp_insights_config_t insights_cfg = {
         .log_type = ESP_DIAG_LOG_TYPE_ERROR | ESP_DIAG_LOG_TYPE_WARNING,
-        .auth_key = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiR29vZ2xlX1BhblBSR1A3ZzNYTDNjRUtROEpzcEQiLCJpc3MiOiJlMzIyYjU5Yy02M2NjLTRlNDAtOGVhMi00ZTc3NjY1NDVjY2EiLCJzdWIiOiJhNTQ2YWRhZC1lNzJiLTQwNTktYmQ2OS1jZDdlMjI0MjZiMmIiLCJleHAiOjIwOTcwNTU4MjgsImlhdCI6MTc4MTY5NTgyOH0.ov9MfxOvJKHnvudy5G3xg26gzAsqnH8-QoppswhEIr17hQScNa2zjqpSQjQA6C5-jXKysTXShyONDaUxXwMCr2P_1nmdS6YeNBkJUGAUU3VGSa8qGwzeZPQPfXPs-ISJ8OGIdVaP3_GQB4DIXXpKuanft45htByv09zNGUcJwLXWDw-LKevG2emfphyg2qIqcxqqdT0Nme3cwTaSkI0O2CTyF3BsMNTAdL3qbjybO67uUhiC3vSd5JAyorqprLX1NKJ5WnLaedTypmFoVr3wxgQ-c3zQ8V258lIyT47pvHGKBSku8mrAzKN33yQqqx_TY_WjA3dKiREdTsKuy6KkMA",
+        .auth_key = "YOUR_ESP_INSIGHTS_AUTH_KEY_HERE",
         .node_id = esp_rmaker_get_node_id(),
     };
     esp_err_t insights_err = esp_insights_init(&insights_cfg);

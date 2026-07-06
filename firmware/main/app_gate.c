@@ -45,6 +45,9 @@
 
 static const char *TAG = "gate";
 
+/* Spinlock protecting cross-task state reads (gate_command is called from MQTT task) */
+static portMUX_TYPE s_state_mux = portMUX_INITIALIZER_UNLOCKED;
+
 /* ---------------------------------------------------------------
  * Internal state (Global variables scoped to this file)
  *
@@ -562,13 +565,22 @@ esp_err_t gate_init(void)
  */
 esp_err_t gate_command(gate_cmd_t cmd)
 {
-    bool is_opening = (s_movement == GATE_MOVE_OPENING || 
-                       s_state == GATE_STATE_PARTIAL_WAIT ||
-                       (s_state != GATE_STATE_IDLE && 
-                        (s_last_cmd == GATE_CMD_OPEN || s_last_cmd == GATE_CMD_PARTIAL_OPEN)));
+    /* Snapshot shared state under spinlock for thread-safe cross-task reads.
+     * gate_command() runs on the MQTT task; these variables are written by
+     * gate_task and position_monitor_task on different cores. */
+    taskENTER_CRITICAL(&s_state_mux);
+    gate_movement_t  snap_movement = s_movement;
+    gate_state_t     snap_state    = s_state;
+    gate_cmd_t       snap_last_cmd = s_last_cmd;
+    taskEXIT_CRITICAL(&s_state_mux);
+
+    bool is_opening = (snap_movement == GATE_MOVE_OPENING || 
+                       snap_state == GATE_STATE_PARTIAL_WAIT ||
+                       (snap_state != GATE_STATE_IDLE && 
+                        (snap_last_cmd == GATE_CMD_OPEN || snap_last_cmd == GATE_CMD_PARTIAL_OPEN)));
                        
-    bool is_closing = (s_movement == GATE_MOVE_CLOSING || 
-                       (s_state != GATE_STATE_IDLE && s_last_cmd == GATE_CMD_CLOSE));
+    bool is_closing = (snap_movement == GATE_MOVE_CLOSING || 
+                       (snap_state != GATE_STATE_IDLE && snap_last_cmd == GATE_CMD_CLOSE));
 
     /* Validate command transitions based on workflow rules */
     if (cmd == GATE_CMD_OPEN) {
@@ -592,9 +604,9 @@ esp_err_t gate_command(gate_cmd_t cmd)
 
 
     /* Allow STOP even during pulsing, cooldown, or partial wait to ensure immediate response */
-    if (s_state != GATE_STATE_IDLE && 
-        !(cmd == GATE_CMD_STOP && (s_state == GATE_STATE_PARTIAL_WAIT || s_state == GATE_STATE_COOLDOWN || s_state == GATE_STATE_PULSING))) {
-        ESP_LOGW(TAG, "Command rejected — state machine busy (state=%d)", s_state);
+    if (snap_state != GATE_STATE_IDLE && 
+        !(cmd == GATE_CMD_STOP && (snap_state == GATE_STATE_PARTIAL_WAIT || snap_state == GATE_STATE_COOLDOWN || snap_state == GATE_STATE_PULSING))) {
+        ESP_LOGW(TAG, "Command rejected — state machine busy (state=%d)", snap_state);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -750,6 +762,20 @@ bool gate_is_obstructed(void)
     return gpio_get_level(GPIO_OBSTRUCTION) == 0;  /* Active LOW */
 }
 
+bool gate_is_contact_open(void)
+{
+    /* Returns true when the gate is NOT at rest in the closed position.
+     * Used by the companion contact sensor to report state to RainMaker/Alexa.
+     * Replaces fragile string comparisons with direct state variable checks. */
+    if (s_obstructed) return true;
+    if (s_in_partial_sequence) return true;
+    if (s_movement != GATE_MOVE_NONE) return true;
+    if (s_state != GATE_STATE_IDLE) {
+        if (s_last_cmd != GATE_CMD_STOP) return true;
+    }
+    return (s_latched_position == GATE_POS_OPEN);
+}
+
 /* ---------------------------------------------------------------
  * Callbacks
  * --------------------------------------------------------------- */
@@ -777,13 +803,14 @@ static void notify_status(void)
 /* ---------------------------------------------------------------
  * Position & Movement Monitor Task
  * ---------------------------------------------------------------
- * Runs every 500ms. Responsibilities:
+ * Runs every POSITION_POLL_MS (10ms). Responsibilities:
  *
  * 1. Detect limit switch changes → report position to RainMaker
  * 2. Track movement after Open/Close command:
- *    - "Opening" until OP limit switch triggers or 10s timeout
- *    - "Closing" until CL limit switch triggers or 10s timeout
+ *    - "Opening" until OP limit switch triggers or 25s timeout
+ *    - "Closing" until CL limit switch triggers or 25s timeout
  * 3. Detect obstruction signal
+ * 4. Monitor BOOT button for Wi-Fi/Factory reset
  * --------------------------------------------------------------- */
 static void position_monitor_task(void *arg)
 {
@@ -800,7 +827,7 @@ static void position_monitor_task(void *arg)
 
     /* Infinite loop for the background position monitor thread */
     for (;;) {
-        /* Sleep the thread for POSITION_POLL_MS (50 ms). */
+        /* Sleep the thread for POSITION_POLL_MS milliseconds. */
         vTaskDelay(pdMS_TO_TICKS(POSITION_POLL_MS));
 
         /* Read the current electrical GPIO pin status */
@@ -895,20 +922,28 @@ static void position_monitor_task(void *arg)
             }
         }
 
-        /* --- 5. Boot button reset check --- */
+        /* --- 5. Boot button reset check ---
+         * Uses >= with one-shot flags so the action fires exactly once
+         * regardless of polling interval or hold duration. */
         static uint32_t boot_button_held_ms = 0;
+        static bool wifi_reset_fired = false;
+        static bool factory_reset_fired = false;
         if (gpio_get_level(GPIO_BOOT_BUTTON) == 0) {
             boot_button_held_ms += POSITION_POLL_MS;
-            if (boot_button_held_ms == WIFI_RESET_HOLD_SEC * 1000) {
-                ESP_LOGW(TAG, "BOOT button held for %d seconds. Resetting Wi-Fi credentials...", WIFI_RESET_HOLD_SEC);
+            if (boot_button_held_ms >= (uint32_t)(WIFI_RESET_HOLD_SEC * 1000) && !wifi_reset_fired) {
+                wifi_reset_fired = true;
+                ESP_LOGW(TAG, "BOOT button held >= %ds — resetting Wi-Fi credentials...", WIFI_RESET_HOLD_SEC);
                 esp_rmaker_wifi_reset(0, 0);
             }
-            else if (boot_button_held_ms == FACTORY_RESET_HOLD_SEC * 1000) {
-                ESP_LOGE(TAG, "BOOT button held for %d seconds. Performing Factory Reset...", FACTORY_RESET_HOLD_SEC);
+            if (boot_button_held_ms >= (uint32_t)(FACTORY_RESET_HOLD_SEC * 1000) && !factory_reset_fired) {
+                factory_reset_fired = true;
+                ESP_LOGE(TAG, "BOOT button held >= %ds — performing Factory Reset...", FACTORY_RESET_HOLD_SEC);
                 esp_rmaker_factory_reset(0, 0);
             }
         } else {
             boot_button_held_ms = 0;
+            wifi_reset_fired = false;
+            factory_reset_fired = false;
         }
     }
 }

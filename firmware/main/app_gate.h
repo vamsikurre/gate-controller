@@ -151,6 +151,14 @@ const char *gate_get_position_string(void);
  */
 bool gate_is_obstructed(void);
 
+/**
+ * Check if the gate contact is open (gate not at rest in closed position).
+ * Used by the companion contact sensor for Alexa/RainMaker integration.
+ * Returns true when: gate is open, opening, closing, obstructed, or in partial sequence.
+ * Returns false when: gate is closed or stopped.
+ */
+bool gate_is_contact_open(void);
+
 /* ---------------------------------------------------------------
  * Callbacks — used by app_main.c to push updates to RainMaker
  *
