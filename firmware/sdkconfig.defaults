@@ -33,6 +33,13 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 # all draw from this one pool; 10 is not enough to run them at the same time.
 CONFIG_LWIP_MAX_SOCKETS=16
 
+# --- Diagnostic HTTP server ---
+# Default header limit is 512 bytes, which a form POST from a phone browser
+# overruns (Origin + Referer + Content-Type + User-Agent + sec-ch-ua/sec-fetch),
+# and the server answers "431 Header fields are too long". One scratch buffer
+# per server, so the extra RAM is paid once.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+
 # --- Logging ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
