@@ -17,7 +17,7 @@ the node cannot reach Wi-Fi at all.
 
 | | |
 |---|---|
-| SSID | `GateDiag-Front Gate` / `GateDiag-Back Gate` |
+| SSID | `Front-Gate` / `Back-Gate` |
 | Password | per node — see below |
 | URL | **http://192.168.4.1/** |
 

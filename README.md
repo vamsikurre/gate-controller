@@ -27,9 +27,9 @@ Both run the same binary. Identity comes from the Wi-Fi MAC, mapped in
 
 | MAC ends with | Device | Node | Diagnostic SSID |
 |---|---|---|---|
-| `3A:AC` | Front Gate | Front Gate Controller | `GateDiag-Front Gate` |
-| `37:5C` | Back Gate | Back Gate Controller | `GateDiag-Back Gate` |
-| anything else | `Sliding Gate - XXXX` | `Gate Controller - XXXX` | `GateDiag-Sliding Gate - XXXX` |
+| `3A:AC` | Front Gate | Front Gate Controller | `Front-Gate` |
+| `37:5C` | Back Gate | Back Gate Controller | `Back-Gate` |
+| anything else | `Sliding Gate - XXXX` | `Gate Controller - XXXX` | `Sliding-Gate-XXXX` |
 
 Add a third gate by adding a MAC case there — nothing else is per-node.
 

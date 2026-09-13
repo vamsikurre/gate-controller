@@ -7,7 +7,8 @@
  * stops showing up in RainMaker there is no USB port to plug into and no
  * way to see what the ESP32 is doing. This module keeps a SoftAP alive in
  * parallel with the normal station connection (WIFI_MODE_APSTA), so you can
- * stand at the gate, join "GateDiag-<name>", open http://192.168.4.1/ and:
+ * stand at the gate, join its own Wi-Fi ("Front-Gate"), open
+ * http://192.168.4.1/ and:
  *
  *   - see Wi-Fi state, RSSI, IP, last disconnect reason, MQTT state
  *   - read the last few KB of ESP_LOG output
@@ -69,9 +70,10 @@ static const char *TAG = "app_diag";
 
 static void diag_apply_ap_config(void);
 
-/* mDNS / DHCP hostname, derived from the node name: "Front Gate" -> "front-gate",
- * so the page is http://front-gate.local/ on the house network and the router's
- * client list says something recognisable. */
+/* Slug of the node name, used two ways: the mDNS/DHCP hostname ("Front Gate"
+ * -> front-gate) and the AP SSID ("Front Gate" -> Front-Gate). Runs of
+ * anything that is not alphanumeric collapse to a single dash, and no dash is
+ * left dangling at either end. */
 static char s_hostname[32];
 
 /* What this node is: "Front Gate" / "Back Gate". Drives the AP SSID, the page
@@ -79,27 +81,24 @@ static char s_hostname[32];
 static char s_node_name[32] = "Gate";
 static char s_node_esc[96]  = "Gate";
 
-static void hostname_from(const char *name)
+static void slugify(const char *in, char *out, size_t n, bool lower)
 {
     size_t o = 0;
-    for (const char *p = name; *p && o < sizeof(s_hostname) - 1; p++) {
+    for (const char *p = in; *p && o < n - 1; p++) {
         char c = *p;
-        if (c >= 'A' && c <= 'Z') {
+        if (lower && c >= 'A' && c <= 'Z') {
             c += 32;
         }
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-            s_hostname[o++] = c;
-        } else if (o > 0 && s_hostname[o - 1] != '-') {
-            s_hostname[o++] = '-';      /* one dash per run of separators */
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            out[o++] = c;
+        } else if (o > 0 && out[o - 1] != '-') {
+            out[o++] = '-';         /* one dash per run of separators */
         }
     }
-    while (o > 0 && s_hostname[o - 1] == '-') {
-        o--;                            /* no trailing dash */
+    while (o > 0 && out[o - 1] == '-') {
+        o--;                        /* no trailing dash */
     }
-    s_hostname[o] = 0;
-    if (o == 0) {
-        strlcpy(s_hostname, "gate-node", sizeof(s_hostname));
-    }
+    out[o] = 0;
 }
 
 /* ---------------------------------------------------------------
@@ -908,7 +907,10 @@ void diag_start(const char *name)
     tuning_load();
     token_init();
 
-    snprintf((char *)s_ap_cfg.ap.ssid, sizeof(s_ap_cfg.ap.ssid), "%s", s_node_name);
+    slugify(s_node_name, (char *)s_ap_cfg.ap.ssid, sizeof(s_ap_cfg.ap.ssid), false);
+    if (s_ap_cfg.ap.ssid[0] == 0) {
+        strlcpy((char *)s_ap_cfg.ap.ssid, "Gate", sizeof(s_ap_cfg.ap.ssid));
+    }
     s_ap_cfg.ap.ssid_len = strlen((char *)s_ap_cfg.ap.ssid);
     s_ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
     s_ap_cfg.ap.max_connection = 2;
@@ -949,7 +951,10 @@ void diag_start(const char *name)
     /* Same server, both interfaces: httpd binds INADDR_ANY, so the page is
      * already reachable on the house network once the node has an IP. These
      * just make it findable without hunting for the IP. */
-    hostname_from(name ? name : "Gate Node");
+    slugify(s_node_name, s_hostname, sizeof(s_hostname), true);
+    if (s_hostname[0] == 0) {
+        strlcpy(s_hostname, "gate-node", sizeof(s_hostname));
+    }
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta) {
         esp_netif_set_hostname(sta, s_hostname);

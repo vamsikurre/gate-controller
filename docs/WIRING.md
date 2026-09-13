@@ -149,7 +149,7 @@ Neither limit switch active → `GATE_POS_PARTIAL` (gate mid-travel).
 7. Safety watchdog: temporarily raise the open pulse to 2500 ms, confirm the
    relay is forced off at 2.0 s with `!!! SAFETY WATCHDOG TRIGGERED !!!` in the
    log, then put the pulse back.
-8. Join `GateDiag-<name>` from a phone and load `http://192.168.4.1/` *while
+8. Join the gate's own Wi-Fi (`Front-Gate` / `Back-Gate`) from a phone and load `http://192.168.4.1/` *while
    the lid is closed* — that is the signal level you will actually have when
    something goes wrong.
 
