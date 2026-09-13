@@ -135,8 +135,33 @@ The scan briefly interrupts the station link, which is harmless here.
 | Everything else | Effect |
 |---|---|
 | **AP password** form | Sets this node's diagnostic AP password (stored on the device). |
-| **Log** | Last ~6 KB of `ESP_LOG` output, captured from the very first line of boot. |
+| **Log** | The console output — see [Log](#log). |
 | **Reboot** | Restarts the node. |
+
+---
+
+## Log
+
+Everything the serial console would have shown, without opening the box. The
+firmware tees `ESP_LOG` output into a 6 KB RAM ring buffer from the first line
+of `app_main()`, so the whole boot sequence is there, oldest first. The page
+jumps to the newest line on load, and **Live view 3s** keeps it reloading while
+you watch something happen.
+
+Two things are *not* in it, because they never pass through `ESP_LOG`:
+
+- **Bootloader and ROM output** — everything printed before the app starts.
+- **Panic backtraces.** The panic handler writes straight to the UART. So a
+  crash shows up as `Last reset: PANIC` on the status page with no backtrace
+  behind it. If you ever need the backtrace from a sealed node, the fix is a
+  core-dump partition written to flash and read back later — there is about
+  360 KB unused at the end of the flash map for it. Not built; say so if a
+  crash ever needs chasing.
+
+The buffer is `LOG_BUF_SIZE` in
+[`app_diag.c`](../firmware/main/app_diag.c) — roughly 60–80 lines. Raising it
+costs the same number of bytes twice in RAM (the ring plus the snapshot the
+page renders from).
 
 ---
 

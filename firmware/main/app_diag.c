@@ -278,6 +278,17 @@ static const char *gate_move_str(void)
     }
 }
 
+/* Opt-in auto-refresh: handy while watching the gate travel or the log tick
+ * over, but it would wipe a half-typed password, so it is never on by default. */
+static bool wants_auto_refresh(httpd_req_t *req)
+{
+    char query[64] = {0}, flag[8] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return false;
+    }
+    return httpd_query_key_value(query, "auto", flag, sizeof(flag)) == ESP_OK;
+}
+
 static const char *reset_reason_str(void)
 {
     switch (esp_reset_reason()) {
@@ -475,13 +486,7 @@ static esp_err_t root_get(httpd_req_t *req)
     fmt_ago(ago_dis, sizeof(ago_dis), s_last_disconnect_us);
     fmt_ago(ago_ip, sizeof(ago_ip), s_last_got_ip_us);
 
-    /* Opt-in auto-refresh: handy while watching the gate travel, but it would
-     * wipe a half-typed password, so it is never on by default. */
-    char query[64] = {0}, flag[8] = {0};
-    bool auto_refresh = false;
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        auto_refresh = (httpd_query_key_value(query, "auto", flag, sizeof(flag)) == ESP_OK);
-    }
+    bool auto_refresh = wants_auto_refresh(req);
 
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
     if (auto_refresh) {
@@ -793,9 +798,18 @@ static esp_err_t log_get(httpd_req_t *req)
     portEXIT_CRITICAL(&s_log_lock);
     snap[total] = '\0';
 
+    bool auto_refresh = wants_auto_refresh(req);
+
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
-    httpd_resp_sendstr_chunk(req, "<p><a class=btn href='/'>Back</a>"
-                                  "<a class=btn href='/log'>Refresh</a></p><pre>");
+    if (auto_refresh) {
+        httpd_resp_sendstr_chunk(req, "<meta http-equiv=refresh content=3>");
+    }
+    CHUNK(req, "<p><a class=btn href='/'>Back</a><a class=btn href='/log'>Refresh</a>"
+               "<a class=btn href='%s'>%s</a></p>"
+               "<p>Oldest first, newest at the bottom. Holds the last %d bytes.</p><pre>",
+          auto_refresh ? "/log" : "/log?auto=1",
+          auto_refresh ? "Stop live view" : "Live view 3s",
+          LOG_BUF_SIZE);
     /* Log lines quote SSIDs and other outside text, so escape on the way out.
      * Escaped in slices to keep the stack buffer small; bytes >= 0x80 pass
      * through untouched, so UTF-8 split across slices still reassembles. */
@@ -807,7 +821,9 @@ static esp_err_t log_get(httpd_req_t *req)
         html_escape(slice, esc, sizeof(esc));
         httpd_resp_sendstr_chunk(req, esc);
     }
-    httpd_resp_sendstr_chunk(req, "</pre>");
+    httpd_resp_sendstr_chunk(req, "</pre>"
+        "<script>var p=document.querySelector('pre');p.scrollTop=p.scrollHeight;"
+        "window.scrollTo(0,document.body.scrollHeight);</script>");
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
 }
