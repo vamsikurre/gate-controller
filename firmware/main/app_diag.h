@@ -15,8 +15,9 @@
 extern "C" {
 #endif
 
-/* SSID is DIAG_AP_PREFIX + the name passed to diag_start(). */
-#define DIAG_AP_PREFIX   "GateDiag-"
+/* The AP's SSID is simply the node name passed to diag_start() - "Front Gate",
+ * "Back Gate". The page is the gate's control panel, not just a debug tool, so
+ * it is named for what it controls. */
 #define DIAG_AP_IP       "192.168.4.1"
 
 /* Bootstrap AP password, used only until a per-node one is set from the
@@ -34,10 +35,11 @@ extern "C" {
 void diag_log_init(void);
 
 /**
- * Bring up the diagnostic AP and its HTTP server.
+ * Bring up the node's own AP and its HTTP server.
  * Call AFTER app_network_start(). Safe to call once.
  *
- * @param name  Human name for this node ("Front Gate"), used in the SSID.
+ * @param name  Human name for this node ("Front Gate"). Used as the AP SSID
+ *              and as the heading on every page.
  */
 void diag_start(const char *name);
 

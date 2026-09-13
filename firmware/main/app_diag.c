@@ -45,6 +45,7 @@
 #include <esp_event.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_app_desc.h>
 #include <esp_random.h>
 #include <esp_mac.h>
 #include <esp_http_server.h>
@@ -72,6 +73,11 @@ static void diag_apply_ap_config(void);
  * so the page is http://front-gate.local/ on the house network and the router's
  * client list says something recognisable. */
 static char s_hostname[32];
+
+/* What this node is: "Front Gate" / "Back Gate". Drives the AP SSID, the page
+ * title and the heading, so you always know which gate you are looking at. */
+static char s_node_name[32] = "Gate";
+static char s_node_esc[96]  = "Gate";
 
 static void hostname_from(const char *name)
 {
@@ -457,16 +463,27 @@ static bool body_ok(httpd_req_t *req, char *buf, size_t n)
 
 static const char *PAGE_HEAD =
     "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Gate node</title><style>"
+    /* Empty icon: stops the browser asking for /favicon.ico, which the server
+     * has nothing to answer with and logs a 404 warning for. */
+    "<link rel=icon href='data:,'><style>"
     "body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:16px;max-width:640px}"
     "table{border-collapse:collapse;width:100%}td{padding:3px 6px;border-bottom:1px solid #ddd}"
     "td:first-child{color:#666;width:45%}"
     "a.btn,button{display:inline-block;padding:9px 14px;margin:3px 3px 3px 0;border:1px solid #888;"
     "border-radius:6px;background:#f4f4f4;text-decoration:none;color:#000;font:inherit;cursor:pointer}"
     "input{padding:8px;width:100%;box-sizing:border-box;margin:3px 0}"
+    "h2{margin:0 0 12px;font-size:22px}h2 a{color:inherit;text-decoration:none}"
     "h3{margin:22px 0 6px}pre{background:#111;color:#0f0;padding:8px;overflow:auto;font-size:12px}"
+    ".cmds button{padding:14px 20px;font-size:16px;font-weight:600}"
     ".warn{background:#fee;border:1px solid #c00;padding:8px;border-radius:6px}"
     "</style>";
+
+/* Every page opens the same way: which gate am I looking at. */
+static void send_page_head(httpd_req_t *req)
+{
+    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    CHUNK(req, "<title>%s</title><h2><a href='/'>%s</a></h2>", s_node_esc, s_node_esc);
+}
 
 static esp_err_t root_get(httpd_req_t *req)
 {
@@ -488,16 +505,38 @@ static esp_err_t root_get(httpd_req_t *req)
 
     bool auto_refresh = wants_auto_refresh(req);
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     if (auto_refresh) {
         httpd_resp_sendstr_chunk(req, "<meta http-equiv=refresh content=5>");
     }
+
+    httpd_resp_sendstr_chunk(req, "<p class=cmds>");
+    POST_BTN(req, "/cmd", "<input type=hidden name=c value=open>", "Open");
+    POST_BTN(req, "/cmd", "<input type=hidden name=c value=close>", "Close");
+    POST_BTN(req, "/cmd", "<input type=hidden name=c value=stop>", "Stop");
+    POST_BTN(req, "/cmd", "<input type=hidden name=c value=partial>", "Partial open");
+    httpd_resp_sendstr_chunk(req, "</p><table>");
+    html_escape(gate_get_status_string(), esc, sizeof(esc));
+    CHUNK(req, "<tr><td>Status</td><td><b>%s</b></td></tr>", esc);
+    CHUNK(req, "<tr><td>Position (limit switches)</td><td>%s</td></tr>", gate_get_position_string());
+    CHUNK(req, "<tr><td>Obstruction</td><td>%s</td></tr>",
+          gate_is_obstructed() ? "<b>ACTIVE</b>" : "clear");
+    CHUNK(req, "<tr><td>Controller</td><td>%s</td></tr>", gate_state_str());
+    CHUNK(req, "<tr><td>Movement</td><td>%s</td></tr>", gate_move_str());
+    CHUNK(req, "<tr><td>Contact sensor reports</td><td>%s</td></tr>",
+          gate_is_contact_open() ? "open" : "closed");
+    CHUNK(req, "<tr><td>Open limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_OPEN,
+          gpio_get_level(GPIO_LIMIT_OPEN) ? "HIGH (not at limit)" : "LOW (at limit)");
+    CHUNK(req, "<tr><td>Close limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_CLOSE,
+          gpio_get_level(GPIO_LIMIT_CLOSE) ? "HIGH (not at limit)" : "LOW (at limit)");
+    httpd_resp_sendstr_chunk(req, "</table>");
+
 
     if (s_ap_pass_is_bootstrap) {
         httpd_resp_sendstr_chunk(req,
             "<p class=warn><b>This node still uses the bootstrap AP password.</b> "
             "It is published in the source repo, so anyone nearby who has read it "
-            "can open the gate. Set a real one at the bottom of this page.</p>");
+            "can open the gate. Set a real one further down this page.</p>");
     }
 
     httpd_resp_sendstr_chunk(req, "<h3>Connection</h3><table>");
@@ -525,32 +564,14 @@ static esp_err_t root_get(httpd_req_t *req)
     CHUNK(req, "<tr><td>Disconnect count</td><td>%lu</td></tr>", (unsigned long)s_disconnect_count);
     httpd_resp_sendstr_chunk(req, "</table>");
 
+    const esp_app_desc_t *app = esp_app_get_description();
     httpd_resp_sendstr_chunk(req, "<h3>Node</h3><table>");
+    CHUNK(req, "<tr><td>Firmware</td><td><b>%s</b><br>%s %s</td></tr>",
+          app->version, app->date, app->time);
     CHUNK(req, "<tr><td>Uptime</td><td>%lldh %lldm %llds</td></tr>", up / 3600, (up / 60) % 60, up % 60);
     CHUNK(req, "<tr><td>Last reset</td><td>%s</td></tr>", reset_reason_str());
     CHUNK(req, "<tr><td>Free heap</td><td>%lu B (min %lu B)</td></tr>",
           (unsigned long)esp_get_free_heap_size(), (unsigned long)esp_get_minimum_free_heap_size());
-    httpd_resp_sendstr_chunk(req, "</table>");
-
-    httpd_resp_sendstr_chunk(req, "<h3>Gate</h3><p>");
-    POST_BTN(req, "/cmd", "<input type=hidden name=c value=open>", "Open");
-    POST_BTN(req, "/cmd", "<input type=hidden name=c value=close>", "Close");
-    POST_BTN(req, "/cmd", "<input type=hidden name=c value=stop>", "Stop");
-    POST_BTN(req, "/cmd", "<input type=hidden name=c value=partial>", "Partial open");
-    httpd_resp_sendstr_chunk(req, "</p><table>");
-    html_escape(gate_get_status_string(), esc, sizeof(esc));
-    CHUNK(req, "<tr><td>Status</td><td><b>%s</b></td></tr>", esc);
-    CHUNK(req, "<tr><td>Position (limit switches)</td><td>%s</td></tr>", gate_get_position_string());
-    CHUNK(req, "<tr><td>Obstruction</td><td>%s</td></tr>",
-          gate_is_obstructed() ? "<b>ACTIVE</b>" : "clear");
-    CHUNK(req, "<tr><td>Controller</td><td>%s</td></tr>", gate_state_str());
-    CHUNK(req, "<tr><td>Movement</td><td>%s</td></tr>", gate_move_str());
-    CHUNK(req, "<tr><td>Contact sensor reports</td><td>%s</td></tr>",
-          gate_is_contact_open() ? "open" : "closed");
-    CHUNK(req, "<tr><td>Open limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_OPEN,
-          gpio_get_level(GPIO_LIMIT_OPEN) ? "HIGH (not at limit)" : "LOW (at limit)");
-    CHUNK(req, "<tr><td>Close limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_CLOSE,
-          gpio_get_level(GPIO_LIMIT_CLOSE) ? "HIGH (not at limit)" : "LOW (at limit)");
     httpd_resp_sendstr_chunk(req, "</table>");
 
     httpd_resp_sendstr_chunk(req, "<h3>Gate timing</h3>"
@@ -646,7 +667,7 @@ static esp_err_t wifi_post(httpd_req_t *req)
     html_escape(ssid, esc_ssid, sizeof(esc_ssid));
     html_escape(err == ESP_OK ? "Saved." : esp_err_to_name(err), esc_err, sizeof(esc_err));
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     CHUNK(req, "<p>%s</p><p>Reconnecting to <b>%s</b>.</p>", esc_err, esc_ssid);
     httpd_resp_sendstr_chunk(req,
         "<p>Give it 15s, then check the status page. If it sticks, reboot the node.</p>"
@@ -676,7 +697,7 @@ static esp_err_t appass_post(httpd_req_t *req)
     /* Don't leave the new secret sitting in the log ring buffer. */
     memset(body, 0, sizeof(body));
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     if (err == ESP_OK) {
         ESP_LOGW(TAG, "Diagnostic AP password changed from the local page");
         httpd_resp_sendstr_chunk(req,
@@ -714,7 +735,7 @@ static esp_err_t tune_post(httpd_req_t *req)
 
     esp_err_t err = tuning_save(strtoul(pulse, NULL, 10), strtoul(partial, NULL, 10));
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     if (err == ESP_OK) {
         CHUNK(req, "<p>Saved: pulse %lu ms, partial delay %lu ms.</p>",
               (unsigned long)s_pulse_ms, (unsigned long)s_partial_ms);
@@ -734,7 +755,7 @@ static esp_err_t scan_get(httpd_req_t *req)
     static wifi_ap_record_t recs[20];
     char esc[200];
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     /* Blocking scan. Briefly interrupts the STA link, which is fine here. */
     if (esp_wifi_scan_start(NULL, true) == ESP_OK) {
         n = sizeof(recs) / sizeof(recs[0]);
@@ -800,7 +821,7 @@ static esp_err_t log_get(httpd_req_t *req)
 
     bool auto_refresh = wants_auto_refresh(req);
 
-    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    send_page_head(req);
     if (auto_refresh) {
         httpd_resp_sendstr_chunk(req, "<meta http-equiv=refresh content=3>");
     }
@@ -880,12 +901,14 @@ void diag_start(const char *name)
         esp_netif_create_default_wifi_ap();
     }
 
+    strlcpy(s_node_name, name ? name : "Gate", sizeof(s_node_name));
+    html_escape(s_node_name, s_node_esc, sizeof(s_node_esc));
+
     ap_pass_load();
     tuning_load();
     token_init();
 
-    snprintf((char *)s_ap_cfg.ap.ssid, sizeof(s_ap_cfg.ap.ssid), DIAG_AP_PREFIX "%s",
-             name ? name : "Node");
+    snprintf((char *)s_ap_cfg.ap.ssid, sizeof(s_ap_cfg.ap.ssid), "%s", s_node_name);
     s_ap_cfg.ap.ssid_len = strlen((char *)s_ap_cfg.ap.ssid);
     s_ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
     s_ap_cfg.ap.max_connection = 2;
