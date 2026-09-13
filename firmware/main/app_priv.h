@@ -95,6 +95,7 @@ extern "C" {
 #define PARAM_STOP              "Stop"
 #define PARAM_PARTIAL_OPEN      "Partial Open"
 #define PARAM_STATUS            "Status"
+#define PARAM_IP_ADDRESS        "IP Address"
 #define PARAM_GATE_POSITION     "Gate Position"
 #define PARAM_OBSTRUCTION       "Obstruction"
 #define PARAM_PULSE_DURATION    "Pulse Duration"
