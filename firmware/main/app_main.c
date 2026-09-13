@@ -115,6 +115,7 @@
 /* Our gate control module */
 #include "app_priv.h"
 #include "app_gate.h"
+#include "app_diag.h"
 
 static const char *TAG = "app_main";
 
@@ -559,6 +560,10 @@ static void app_prov_ip_event_handler(void* arg, esp_event_base_t event_base,
  * --------------------------------------------------------------- */
 void app_main(void)
 {
+    /* Start capturing logs into RAM before anything else, so the diagnostic
+     * page at http://192.168.4.1/log shows the whole boot sequence. */
+    diag_log_init();
+
     ESP_LOGI(TAG, "===================================");
     ESP_LOGI(TAG, "  Gate Controller — Starting Up");
     ESP_LOGI(TAG, "===================================");
@@ -735,6 +740,12 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "app_network_start failed: %s", esp_err_to_name(err));
     }
+
+    /* ---- Step 8: Diagnostic AP ----
+     * Nodes are sealed inside the gate box with no serial access. Keep a
+     * SoftAP + status/recovery page running alongside the STA connection.
+     * See docs/DIAGNOSTIC_AP.md */
+    diag_start(unique_device_name);
 
     ESP_LOGI(TAG, "===================================");
     ESP_LOGI(TAG, "  Startup complete — waiting for");

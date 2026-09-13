@@ -1,2 +1,2 @@
-idf_component_register(SRCS "app_main.c" "app_gate.c"
+idf_component_register(SRCS "app_main.c" "app_gate.c" "app_diag.c"
                        INCLUDE_DIRS ".")

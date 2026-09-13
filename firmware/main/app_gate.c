@@ -42,6 +42,7 @@
 #include "app_priv.h"
 #include "app_gate.h"
 #include <esp_rmaker_core.h>
+#include <esp_rmaker_utils.h>  /* esp_rmaker_wifi_reset / esp_rmaker_factory_reset */
 
 static const char *TAG = "gate";
 

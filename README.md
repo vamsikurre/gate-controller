@@ -1,99 +1,135 @@
-# ESP RainMaker Smart Gate Controller — Implementation Plan
+# Smart Gate Controller
 
-Retrofit the JIELONG JL-SD800 sliding gate controller with Wi-Fi control using an ESP32 4-channel relay board and the ESP RainMaker cloud platform.
+Wi-Fi control for two JIELONG JL-SD800 sliding gates (Front and Back), built by
+retrofitting an ESP32 + 4-channel relay board into each gate's existing BH900
+controller box and exposing it through [ESP RainMaker](https://rainmaker.espressif.com/)
+(and from there, Alexa).
 
----
+The ESP32 does not replace the gate controller. It presses its buttons —
+each command is a 500 ms dry-contact pulse across the same terminals the wall
+button and the remote use. Pull the ESP32 out and the gate works exactly as it
+did before.
 
-## 1. System Components & Hardware State
-
-| Component | Detail |
+| | |
 |---|---|
-| **Gate Motor** | JIELONG JL-SD800 — 800kg, 110W, 220V→DC24V, 1600RPM |
-| **Controller Board** | BH900-family with DIP switches (only SOFT STOP enabled) |
-| **Terminal Strip** | `24V light-` `24V light+` `485 B-` `485 A+` `12V` `COM` `LOOP` `OPEN` `CLOSE` `ONE` `STOP` `INFR` `COM` |
-| **ESP32 Module** | ESP32-WROOM-32 (FCC ID: 2AC7Z-ESP-32) — supports RainMaker self-claim |
-| **ESP32 Relay Board** | 4-channel, active-low relays, 5V barrel jack input (easyelectronics.in) |
-| **Relay GPIOs** | Relay 1: GPIO 19 · Relay 2: GPIO 18 · Relay 3: GPIO 5 · Relay 4: GPIO 17 |
-| **Verified Dry Contacts** | COM↔OPEN (opens) · COM↔CLOSE (closes) · COM↔STOP (stops) |
-| **Optocoupler Module** | PC817 4-Channel Isolation (PC817 C545) — used for 5V active-HIGH signal isolation |
+| **Wiring, pinout, bench checks** | [docs/WIRING.md](docs/WIRING.md) |
+| **Node offline? Start here** | [docs/DIAGNOSTIC_AP.md](docs/DIAGNOSTIC_AP.md) |
+| Firmware | [`firmware/`](firmware/) — ESP-IDF ≥ 5.1, built against 5.4.4 |
+| Photos | [`images/`](images/) |
+| State machine sketches | `state.drawio`, `virtual_sensor_states.drawio` |
 
 ---
 
-## 2. Power Solution (Implemented)
-The ESP32 relay board is powered from the BH900 motherboard's **12V** and **COM** terminals. 
-- **Voltage Regulator**: An adjustable buck converter with its `5V` output pad soldered/bridged.
-- **Output**: Regulated 5V output wired to the ESP32 relay board's 5V barrel jack.
-- **Testing Status**: Power solution has been verified and successfully run continuously for over 5 days.
+## The two nodes
 
----
+Both run the same binary. Identity comes from the Wi-Fi MAC, mapped in
+`app_main.c`:
 
-## 3. Wiring & Physical Integration (Single CAT5 Cable)
-To simplify routing and ensure a waterproof seal, a single **half-foot (15 cm) CAT5 cable** is routed between the BH900 motherboard and the enclosure housing the ESP32 board and PC817 optocoupler.
-
-Since all inputs and outputs on the BH900 share a common ground reference, a **single shared GND wire** is used in the CAT5.
-
-### CAT5 Wire Allocation
-| Pair Color | Wire Color | Signal / Connection | Connection Details |
+| MAC ends with | Device | Node | Diagnostic SSID |
 |---|---|---|---|
-| **Orange Pair** | Orange | **12V Power** | BH900 `12V` $\rightarrow$ Buck Converter `IN+` |
-| | Orange-White | **Shared GND** | BH900 `COM` $\rightarrow$ Buck `IN-` / ESP32 `GND` / Opto `G-out` |
-| **Green Pair** | Green | **Open Command** | Relay 1 NO $\rightarrow$ BH900 `OPEN` |
-| | Green-White | **Close Command** | Relay 2 NO $\rightarrow$ BH900 `CLOSE` |
-| **Blue Pair** | Blue | **Stop Command** | Relay 3 NO $\rightarrow$ BH900 `STOP` |
-| | Blue-White | **Open Limit Sensor** | BH900 `Hi` $\rightarrow$ Opto `IN1` |
-| **Brown Pair** | Brown | **Close Limit Sensor** | BH900 `CL` $\rightarrow$ Opto `IN2` |
-| | Brown-White | **Obstruction Sensor** | BH900 `INFR` $\rightarrow$ Opto `IN3` |
+| `3A:AC` | Front Gate | Front Gate Controller | `GateDiag-Front Gate` |
+| `37:5C` | Back Gate | Back Gate Controller | `GateDiag-Back Gate` |
+| anything else | `Sliding Gate - XXXX` | `Gate Controller - XXXX` | `GateDiag-Sliding Gate - XXXX` |
 
-*Note: The common contacts (COM) for Relays 1, 2, and 3 are daisy-chained directly on the relay board and connected to the Shared GND. The optocoupler input negative (`G`) terminals are also daisy-chained and connected to the Shared GND.*
+Add a third gate by adding a MAC case there — nothing else is per-node.
 
 ---
 
-## 4. Optocoupler Isolation (PC817 Module)
-The gate controller outputs **active-HIGH 5V signals** on the limit switches and obstruction terminals (`Hi`, `CL`, and `INFR`). The PC817 module isolates and level-shifts these 5V signals to safe 3.3V levels for the ESP32.
+## Hardware
 
-### Input Signal Logic Mapping
-The optocoupler inverts the logic level (5V active-HIGH input becomes 0V active-LOW output at the ESP32 GPIOs):
+| Part | Detail |
+|---|---|
+| Gate motor | JIELONG JL-SD800 — 800 kg, 110 W, 220 V → DC 24 V, 1600 RPM |
+| Controller board | BH900 family (DIP switches: only SOFT STOP enabled) |
+| MCU | ESP32-WROOM-32 on a 4-channel relay board (easyelectronics.in), relays active-LOW |
+| Isolation | PC817 4-channel optocoupler module, 5 V inputs → 3.3 V, inverting |
+| Power | BH900 `12V` → adjustable buck converter (5 V pad bridged) → relay board |
+| Interconnect | one 15 cm CAT5, shared ground |
 
-| Gate Condition | Controller Terminal | Opto LED | ESP32 GPIO (with Internal Pull-up) | GPIO Level | Firmware Interpretation |
-|---|---|---|---|---|---|
-| **Fully Open** | `CL` = 5V | ON | GPIO 14 | **LOW (0)** | `GATE_POS_OPEN` ✓ |
-| **Moving / Closed** | `CL` = 0V | OFF | GPIO 14 | **HIGH (1)** | Not open ✓ |
-| **Fully Closed** | `Hi` = 5V | ON | GPIO 13 | **LOW (0)** | `GATE_POS_CLOSED` ✓ |
-| **Moving / Open** | `Hi` = 0V | OFF | GPIO 13 | **HIGH (1)** | Not closed ✓ |
-| **Obstructed** | `INFR` = 5V | ON | GPIO 27 | **LOW (0)** | `gate_is_obstructed() = true` ✓ |
-| **Clear** | `INFR` = 0V | OFF | GPIO 27 | **HIGH (1)** | `gate_is_obstructed() = false` ✓ |
+Full detail and the pin table are in [docs/WIRING.md](docs/WIRING.md).
 
 ---
 
-## 5. Firmware Features & Safety Logic
+## What the firmware does
 
-### 5.1 ESP RainMaker Integration
-- **BLE Provisioning**: Easy setup via the ESP RainMaker mobile app with a static Proof of Possession (PoP) pin: `gate1234`.
-- **UI Elements**: Switch controls for **Open**, **Close**, **Stop**, and **Partial Open**, along with a unified **Status** text display.
+**Commands** — Open, Close, Stop, Partial Open. Each pulses its relay for
+500 ms. A 1 s cooldown is enforced between commands, except STOP, which always
+goes through immediately.
 
-### 5.2 Wi-Fi Credentials Recovery (Accidental Reset Safe)
-- **3x Rapid Power Cycle**: If the device is power cycled 3 times quickly (within 5 seconds of boot), the current Wi-Fi credentials are backed up to NVS under `"wifi_backup"`, `"prov_triggered"` is set to `1`, and the active Wi-Fi config is cleared to reboot the chip into BLE provisioning mode.
-- **4th Power Cycle / Bypassing Provisioning**: On the next manual boot (if provisioning is bypassed), the firmware detects that `"prov_triggered"` is `0` but a `"wifi_backup"` exists. It automatically restores the backed up configuration, deletes the backup from NVS, and connects to the old Wi-Fi network.
-- **Clean Provisioning**: Once the device successfully connects to a new Wi-Fi network and gets an IP address (`IP_EVENT_STA_GOT_IP`), the backup is permanently erased.
+**Position** — read from the BH900 limit-switch terminals through the
+optocoupler, polled every 10 ms: `Open`, `Closed`, `Partial`, `Unknown`.
+Obstruction comes from the `INFR` terminal.
 
-### 5.3 Safety Watchdog
-- **Stuck Relay Watchdog**: A high-priority background FreeRTOS task polls the relay GPIO levels every 100ms. If any relay stays in the active state (`RELAY_ON` / LOW) for $\ge$ 2 seconds, the watchdog triggers a critical error log and forces the relay pin back to the `RELAY_OFF` (HIGH) state.
-- **Relay Cooldown**: A mandatory 1-second delay is enforced between operations to protect the motors and relays. A manual STOP command bypasses this cooldown immediately for safety.
+**Movement tracking** — after a command the node reports `Opening`/`Closing`
+until the limit switch confirms arrival, a 25 s timeout expires, an obstruction
+fires, or a STOP arrives.
+
+**Partial open** — OPEN pulse, wait 4 s, STOP pulse.
+
+**Safety watchdog** — a task polls the relay GPIOs every 100 ms. Any relay
+energised for ≥ 2 s is forced off and logged as
+`!!! SAFETY WATCHDOG TRIGGERED !!!`. A stuck relay would otherwise hold the
+gate's input asserted indefinitely.
+
+**Diagnostic AP** — an always-on SoftAP with a status/recovery page, reachable
+when the node has no cloud or no Wi-Fi at all. Its password is per node and
+lives on the device; set one the first time you connect to each.
+See [docs/DIAGNOSTIC_AP.md](docs/DIAGNOSTIC_AP.md).
+
+**Wi-Fi credential recovery** — power-cycle the node 3× within 5 s of boot and
+it backs up its current credentials to NVS and drops into BLE provisioning. If
+you then power-cycle again without provisioning, it restores the backup and
+rejoins the old network. Boot normally for 5 s and the counter resets. This
+exists so that an accidental triple power cut doesn't strand a sealed node.
+
+**Boot button (GPIO 0)** — hold 3 s for Wi-Fi reset, 10 s for factory reset.
+
+**RainMaker** — BLE provisioning with a fixed PoP of `gate1234`, OTA,
+schedules, scenes, timezone, plus a companion contact-sensor device so Alexa
+can report gate state.
 
 ---
 
-## 6. Verification Checklist
+## Build and flash
 
-### 6.1 Power & Hardware
-1. Confirm buck converter output is stable at 5.0V with the 5V pad bridged.
-2. Verify the ESP32 boots on buck converter power.
-3. Verify CAT5 cable connections and common ground continuity.
+```bash
+# once per shell
+. $IDF_PATH/export.sh          # Windows: . C:\esp\v5.4.4\esp-idf\export.ps1
 
-### 6.2 Manual Functional Verification
-1. **Pulsing & Cooldown**: Send commands from the app and verify the corresponding relay clicks, holds for 500ms, and enforces a 1s cooldown.
-2. **Watchdog Verification**: Temporarily extend the open pulse duration in code to 2.5s and verify the watchdog cuts off the relay at exactly 2.0s with a `!!! SAFETY WATCHDOG TRIGGERED !!!` log.
-3. **Power-Cycle Recovery**:
-   - Power cycle the board 3 times to enter provisioning.
-   - Power cycle it a 4th time without provisioning and verify it connects back to the old Wi-Fi.
-   - Re-enter provisioning mode and connect to a new network; verify the backup is cleared.
-4. **Limits & Sensors**: Physically trigger the limit switches and obstruction sensor; verify the status in the mobile app updates correctly.
+cd firmware
+idf.py build
+idf.py -p COM5 flash monitor   # your port
+```
+
+Notes:
+
+- Erasing flash (`idf.py erase-flash`) wipes the RainMaker certificate in the
+  `fctry` partition. The node then has to be re-provisioned and re-claimed from
+  the app. Don't do it casually — `idf.py flash` alone is enough.
+- Ordinary updates are better pushed as **OTA** from the RainMaker dashboard;
+  the nodes auto-fetch hourly. That avoids opening the gate boxes at all.
+- The project targets ESP32 with the custom `partitions.csv` (two OTA slots +
+  `fctry`). Don't switch to a stock partition table.
+
+## First-time provisioning
+
+1. Flash, power up.
+2. RainMaker app → **Add Device** → scan the QR code from the serial log, or
+   pair over BLE with PoP `gate1234`.
+3. Send Wi-Fi credentials; the app performs assisted claiming.
+   ESP32-WROOM-32 does **not** support self-claiming, hence
+   `CONFIG_ESP_RMAKER_ASSISTED_CLAIM=y`.
+4. The gate appears with Open / Close / Stop / Partial Open and a status line.
+
+---
+
+## Troubleshooting
+
+| Symptom | Where to look |
+|---|---|
+| Node shows offline in the app | [docs/DIAGNOSTIC_AP.md](docs/DIAGNOSTIC_AP.md) — join the node's AP and read the status page |
+| Gate doesn't move on a command | Diagnostic page: does the relay click? If yes, the problem is downstream on the BH900 |
+| Status stuck on `Opening`/`Closing` | Limit switch / opto input. Check GPIO 13 and 14 wiring |
+| Permanently `Obstructed` | `INFR` line or the IR beam alignment |
+| `Timeout` in status | Gate didn't reach its limit within 25 s — mechanical, or a limit switch not wired |
+| Node reboots repeatedly | Diagnostic page, **Last reset**. `BROWNOUT` = power; `PANIC` = read the log |
