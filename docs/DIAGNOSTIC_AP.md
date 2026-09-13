@@ -134,7 +134,8 @@ The scan briefly interrupts the station link, which is harmless here.
 
 | Everything else | Effect |
 |---|---|
-| **AP password** form | Sets this node's diagnostic AP password (stored on the device). |
+| **AP password** form | Sets this node's AP password (stored on the device). |
+| **Hide SSID** | Stops the AP broadcasting its name. Off by default; see below. |
 | **Log** | The console output — see [Log](#log). |
 | **Reboot** | Restarts the node. |
 
@@ -193,6 +194,13 @@ The page already spells these out in words; this is the fuller table.
   `403 bad token` — reload the page.
 - Nearby AP names and log lines are HTML-escaped before they reach the page;
   an SSID is whatever a neighbour decided to broadcast.
+- **Hiding the SSID is not a security measure.** The name still goes over the
+  air in the probe exchange every time someone connects, and any scanner picks
+  it up in seconds. The WPA2 password is the thing that guards the gate. What
+  hiding does cost you is real: a hidden network has to be added by hand on a
+  phone — type the SSID exactly, pick WPA2 — while standing at the gate. It is
+  a toggle rather than a build-time setting so you can switch it back from the
+  page on the house network instead of needing an OTA.
 - A SoftAP has to share the radio with the station link. Expect a little extra
   latency while someone is connected to the AP; it does not affect relay timing.
 - The provisioning manager resets the Wi-Fi mode to station-only at several

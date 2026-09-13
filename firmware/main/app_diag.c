@@ -67,6 +67,7 @@ static const char *TAG = "app_diag";
 #define DIAG_NVS_PASS_KEY  "ap_pass"
 #define DIAG_NVS_PULSE_KEY "pulse_ms"
 #define DIAG_NVS_PART_KEY  "partial_ms"
+#define DIAG_NVS_HIDE_KEY  "ap_hidden"
 
 static void diag_apply_ap_config(void);
 
@@ -359,6 +360,51 @@ static esp_err_t ap_pass_save(const char *pass)
 }
 
 /* ---------------------------------------------------------------
+ * SSID visibility
+ * ---------------------------------------------------------------
+ * Hiding the SSID stops the beacon carrying it. Worth being clear that this
+ * is not a security control: the name still goes over the air in probe
+ * exchanges every time someone connects, and any scanner picks it up. The
+ * WPA2 password is what actually guards the gate.
+ *
+ * It is a toggle rather than a constant because a hidden network has to be
+ * typed in by hand on a phone, at the gate, possibly in the rain - and
+ * undoing a hardcoded one would mean an OTA to a node you just made harder
+ * to reach. From here it can be switched back from the LAN page.
+ * --------------------------------------------------------------- */
+static bool s_ap_hidden = false;    /* visible until someone turns it off */
+
+static void ap_hidden_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, DIAG_NVS_HIDE_KEY, &v) == ESP_OK) {
+            s_ap_hidden = v ? true : false;
+        }
+        nvs_close(h);
+    }
+}
+
+static esp_err_t ap_hidden_save(bool hidden)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u8(h, DIAG_NVS_HIDE_KEY, hidden ? 1 : 0);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err == ESP_OK) {
+        s_ap_hidden = hidden;
+    }
+    return err;
+}
+
+/* ---------------------------------------------------------------
  * Gate timing — mirrors what we pushed into app_gate, persisted here so
  * a tweak survives the next power cut. app_gate owns the real values and
  * clamps them; these are only what we last set and what we show.
@@ -601,6 +647,12 @@ static esp_err_t root_get(httpd_req_t *req)
                "<button type=submit>Change</button></form>",
           DIAG_AP_PASS_MIN, DIAG_AP_PASS_MAX);
 
+    CHUNK(req, "<p>SSID is <b>%s</b>. Hiding it is not a security measure - the name "
+               "still goes over the air whenever someone connects - and a hidden network "
+               "has to be added by hand on a phone.</p>",
+          s_ap_hidden ? "hidden" : "visible");
+    POST_BTN(req, "/aphide", "", s_ap_hidden ? "Make SSID visible" : "Hide SSID");
+
     CHUNK(req, "<p><a class=btn href='/'>Refresh</a>"
                "<a class=btn href='%s'>%s</a>"
                "<a class=btn href='/scan'>Scan APs</a><a class=btn href='/log'>Log</a>",
@@ -720,6 +772,35 @@ static esp_err_t appass_post(httpd_req_t *req)
 static int by_rssi_desc(const void *a, const void *b)
 {
     return ((const wifi_ap_record_t *)b)->rssi - ((const wifi_ap_record_t *)a)->rssi;
+}
+
+static esp_err_t aphide_post(httpd_req_t *req)
+{
+    char body[96];
+    if (!body_ok(req, body, sizeof(body))) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "bad token");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = ap_hidden_save(!s_ap_hidden);
+
+    send_page_head(req);
+    if (err == ESP_OK) {
+        ESP_LOGW(TAG, "AP SSID is now %s", s_ap_hidden ? "hidden" : "visible");
+        CHUNK(req, "<p>SSID is now <b>%s</b>.</p>", s_ap_hidden ? "hidden" : "visible");
+        if (s_ap_hidden) {
+            CHUNK(req, "<p class=warn>To join from a phone from now on you have to add the "
+                       "network by hand and type <b>%s</b> exactly, with WPA2 security. "
+                       "This page on the house network still works either way.</p>", s_node_esc);
+        }
+        httpd_resp_sendstr_chunk(req, "<p>The AP restarts, so you will be dropped. "
+                                      "<a class=btn href='/'>Back</a></p>");
+        xTaskCreate(reapply_ap_task, "diag_reap", 2560, NULL, 5, NULL);
+    } else {
+        CHUNK(req, "<p>Failed: %s</p><p><a class=btn href='/'>Back</a></p>", esp_err_to_name(err));
+    }
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
 }
 
 static esp_err_t tune_post(httpd_req_t *req)
@@ -875,6 +956,7 @@ static httpd_handle_t s_httpd;
 static void diag_apply_ap_config(void)
 {
     strlcpy((char *)s_ap_cfg.ap.password, s_ap_pass, sizeof(s_ap_cfg.ap.password));
+    s_ap_cfg.ap.ssid_hidden = s_ap_hidden ? 1 : 0;
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     esp_wifi_set_config(WIFI_IF_AP, &s_ap_cfg);
 }
@@ -904,6 +986,7 @@ void diag_start(const char *name)
     html_escape(s_node_name, s_node_esc, sizeof(s_node_esc));
 
     ap_pass_load();
+    ap_hidden_load();
     tuning_load();
     token_init();
 
@@ -942,6 +1025,7 @@ void diag_start(const char *name)
         { .uri = "/wifi",   .method = HTTP_POST, .handler = wifi_post },
         { .uri = "/appass", .method = HTTP_POST, .handler = appass_post },
         { .uri = "/tune",   .method = HTTP_POST, .handler = tune_post },
+        { .uri = "/aphide", .method = HTTP_POST, .handler = aphide_post },
         { .uri = "/reboot", .method = HTTP_POST, .handler = reboot_post },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
