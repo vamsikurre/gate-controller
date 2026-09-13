@@ -899,6 +899,11 @@ void diag_start(const char *name)
     httpd_config_t hcfg = HTTPD_DEFAULT_CONFIG();
     hcfg.lru_purge_enable = true;
     hcfg.max_uri_handlers = 10;
+    /* esp_http_server reserves 3 more sockets on top of this, so the default 7
+     * lays claim to the whole lwIP pool and leaves nothing for MQTT or the OTA
+     * download - which is exactly how an OTA fails with ESP_ERR_HTTP_CONNECT.
+     * One phone on a diagnostic page does not need more than this. */
+    hcfg.max_open_sockets = 3;
     if (httpd_start(&s_httpd, &hcfg) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start diagnostic HTTP server");
         return;

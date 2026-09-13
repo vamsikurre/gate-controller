@@ -28,6 +28,11 @@ CONFIG_ESP_RMAKER_OTA_AUTOFETCH_PERIOD=3600
 CONFIG_ESP_TASK_WDT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 
+# --- Network sockets ---
+# Default is 10. The diagnostic HTTP server, mDNS, MQTT and the OTA download
+# all draw from this one pool; 10 is not enough to run them at the same time.
+CONFIG_LWIP_MAX_SOCKETS=16
+
 # --- Logging ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
