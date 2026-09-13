@@ -600,9 +600,6 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
-    /* Register event handler for IP_EVENT_STA_GOT_IP to clean up any backup credentials */
-    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &app_prov_ip_event_handler, NULL);
-
     /* ---- Step 2: Gate Control ----
      * Initialise GPIOs and create the relay control task.
      * All relays are forced OFF at this point. */
@@ -612,6 +609,17 @@ void app_main(void)
      * app_network_init() sets up the Wi-Fi driver and provisioning manager.
      * It does NOT connect yet — that happens in app_network_start(). */
     app_network_init();
+
+    /* Register the IP_EVENT_STA_GOT_IP handler (reports our address to the app
+     * and clears any backup credentials).
+     * This has to come AFTER app_network_init(), which is what creates the
+     * default event loop. Registering before it exists fails with
+     * ESP_ERR_INVALID_STATE and the handler silently never runs. */
+    err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                     &app_prov_ip_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IP event handler: %s", esp_err_to_name(err));
+    }
 
     /* Check for rapid power-cycle to reset Wi-Fi credentials */
     check_rapid_power_cycle();
