@@ -40,6 +40,26 @@ anything can still be reached here.**
 
 ## What the page shows
 
+**Gate** — the buttons come first: **Open · Close · Stop · Partial open**. They
+go through the same `gate_command()` path as the RainMaker app, cooldown and
+safety watchdog included, so the gate stays fully usable with no internet at
+all. Below them:
+
+| Field | Read it as |
+|---|---|
+| Status | same string the app shows: `Opening`, `Closed`, `Obstructed`… |
+| Position | what the limit switches say right now |
+| Obstruction | the `INFR` line |
+| Controller | state machine: idle, relay energised, cooldown, partial-wait |
+| Movement | what the node is waiting for after a command |
+| Contact sensor reports | what Alexa is being told |
+| Open / Close limit (GPIO 14 / 13) | raw pin levels, for when the position field looks wrong |
+
+**Gate timing** — pulse duration (how long the relay is held, i.e. how long the
+button is "pressed") and partial delay (how far the gate travels before the
+partial-open sequence sends STOP). Saved on the device, so a tweak survives the
+next power cut. Ranges are 100–2000 ms and 500–30000 ms.
+
 **Connection**
 
 | Field | Read it as |
@@ -49,42 +69,51 @@ anything can still be reached here.**
 | RSSI | signal at the gate box. Below −75 dBm is the usual culprit |
 | IP | `0.0.0.0` means associated but no DHCP lease |
 | RainMaker MQTT | the actual "is it online in the app" answer |
-| Last disconnect | Wi-Fi reason code + how long ago (see table below) |
+| Last disconnect | how long ago |
+| **Why** | the disconnect reason in words — "WRONG PASSWORD", "NETWORK NOT FOUND", "beacon lost — signal dropped out" — with the raw code after it |
 | Disconnect count | climbing steadily = flapping link, not a one-off |
 
 **Node** — uptime, last reset reason, free heap.
 
 - Uptime resetting to near-zero every few minutes → the node is crash-looping.
 - `Last reset: BROWNOUT` → power problem, see [WIRING.md](WIRING.md#2-power).
-- `Last reset: PANIC` or a watchdog → firmware crash; the log below should show it.
+- `Last reset: PANIC` or a watchdog → firmware crash; the log should show it.
 - Free heap trending toward zero across visits → leak.
 
-**Gate** — live status, position from the limit switches, obstruction state,
-plus **Open / Close / Stop / Partial** buttons. These go through the same
-`gate_command()` path as the app, cooldown and safety watchdog included, so the
-gate stays usable while the cloud is down.
+**Auto-refresh 5s** reloads the page on a timer — useful while watching the gate
+travel. It is off by default because it would wipe a half-typed password; hit
+**Stop auto-refresh** before filling in a form.
 
 ---
 
-## What you can do
+## Fixing the Wi-Fi
 
-| Button | Effect |
+**Scan APs** does a live scan from inside the box and gives you a dropdown of
+everything it can hear, with signal levels. Pick the network, type the password,
+**Connect**. That is the fix for the common case: router replaced, SSID renamed,
+password changed, or the node latched onto credentials from an old provisioning.
+
+A hidden network won't be in the list — type its SSID into the **Force Wi-Fi**
+form on the status page instead.
+
+Either way the credentials are persisted, so they survive a reboot. Wait ~15 s
+and reload the status page. If Wi-Fi shows connected but MQTT does not, reboot
+once — RainMaker's MQTT backoff can run to several minutes and a reboot
+short-circuits it.
+
+The scan briefly interrupts the station link, which is harmless here.
+
+| Everything else | Effect |
 |---|---|
-| **Force Wi-Fi** form | Writes a new SSID/password, drops the link and reconnects. Persisted, so it survives a reboot. |
-| **AP password** form | Sets this node's diagnostic AP password (stored in NVS). |
-| **Scan APs** | Blocking scan — what the node can actually hear from inside the box. Briefly interrupts the station link. |
+| **AP password** form | Sets this node's diagnostic AP password (stored on the device). |
 | **Log** | Last ~6 KB of `ESP_LOG` output, captured from the very first line of boot. |
 | **Reboot** | Restarts the node. |
 
-**Force Wi-Fi is the fix for the common case**: router replaced, SSID renamed,
-password changed, or the node latched onto credentials from an old provisioning.
-Type the right ones in, wait ~15 s, reload the status page. If Wi-Fi shows
-connected but MQTT does not, reboot once — RainMaker's MQTT backoff can run to
-several minutes and a reboot short-circuits it.
-
 ---
 
-## Common Wi-Fi disconnect reason codes
+## Wi-Fi disconnect reason codes
+
+The page already spells these out in words; this is the fuller table.
 
 | Code | Meaning | Usual fix |
 |---|---|---|

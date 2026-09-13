@@ -48,6 +48,7 @@
 #include <esp_random.h>
 #include <esp_mac.h>
 #include <esp_http_server.h>
+#include <driver/gpio.h>
 #include <nvs.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -55,11 +56,14 @@
 
 #include "app_diag.h"
 #include "app_gate.h"
+#include "app_priv.h"
 
 static const char *TAG = "app_diag";
 
 #define DIAG_NVS_NS        "diag"
 #define DIAG_NVS_PASS_KEY  "ap_pass"
+#define DIAG_NVS_PULSE_KEY "pulse_ms"
+#define DIAG_NVS_PART_KEY  "partial_ms"
 
 static void diag_apply_ap_config(void);
 
@@ -195,6 +199,56 @@ static void urldecode(char *s)
     *w = '\0';
 }
 
+/* Why the station link dropped. The bare code is useless at the gate;
+ * these are the ones that actually show up in the field. */
+static const char *wifi_reason_str(uint8_t reason)
+{
+    switch (reason) {
+    case 0:   return "no disconnect yet";
+    case 1:   return "unspecified";
+    case 2:   return "auth expired - weak signal, or the AP dropped us";
+    case 3:   return "we de-authenticated";
+    case 4:   return "association expired - AP timed the session out";
+    case 5:   return "AP is full (too many clients)";
+    case 6:
+    case 7:   return "AP does not think we are associated";
+    case 8:   return "AP asked us to leave";
+    case 15:  return "WRONG PASSWORD (4-way handshake timed out)";
+    case 16:  return "group key update timed out";
+    case 23:  return "802.1X auth failed";
+    case 24:  return "cipher suite rejected - AP security mismatch";
+    case 200: return "beacon lost - signal dropped out";
+    case 201: return "NETWORK NOT FOUND - wrong SSID, AP off, or out of range";
+    case 202: return "AUTH FAILED - usually the wrong password";
+    case 203: return "association refused by the AP";
+    case 204: return "handshake timed out";
+    case 205: return "connection failed - usually marginal signal";
+    case 206: return "AP reset its clock";
+    case 207: return "roaming to another AP";
+    default:  return "see the ESP-IDF reason code table";
+    }
+}
+
+static const char *gate_state_str(void)
+{
+    switch (gate_get_state()) {
+    case GATE_STATE_IDLE:         return "idle, ready";
+    case GATE_STATE_PULSING:      return "relay energised";
+    case GATE_STATE_COOLDOWN:     return "cooldown (rejecting commands)";
+    case GATE_STATE_PARTIAL_WAIT: return "partial open, waiting to auto-stop";
+    default:                      return "unknown";
+    }
+}
+
+static const char *gate_move_str(void)
+{
+    switch (gate_get_movement()) {
+    case GATE_MOVE_OPENING: return "opening, waiting for the open limit";
+    case GATE_MOVE_CLOSING: return "closing, waiting for the closed limit";
+    default:                return "not tracking movement";
+    }
+}
+
 static const char *reset_reason_str(void)
 {
     switch (esp_reset_reason()) {
@@ -260,6 +314,53 @@ static esp_err_t ap_pass_save(const char *pass)
 }
 
 /* ---------------------------------------------------------------
+ * Gate timing — mirrors what we pushed into app_gate, persisted here so
+ * a tweak survives the next power cut. app_gate owns the real values and
+ * clamps them; these are only what we last set and what we show.
+ * --------------------------------------------------------------- */
+static uint32_t s_pulse_ms   = DEFAULT_PULSE_OPEN_MS;
+static uint32_t s_partial_ms = DEFAULT_PARTIAL_DELAY_MS;
+
+static void tuning_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u32(h, DIAG_NVS_PULSE_KEY, &s_pulse_ms);
+        nvs_get_u32(h, DIAG_NVS_PART_KEY, &s_partial_ms);
+        nvs_close(h);
+    }
+    gate_set_pulse_duration(s_pulse_ms);
+    gate_set_partial_delay(s_partial_ms);
+}
+
+static esp_err_t tuning_save(uint32_t pulse_ms, uint32_t partial_ms)
+{
+    if (pulse_ms < 100 || pulse_ms > 2000 || partial_ms < 500 || partial_ms > 30000) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u32(h, DIAG_NVS_PULSE_KEY, pulse_ms);
+    if (err == ESP_OK) {
+        err = nvs_set_u32(h, DIAG_NVS_PART_KEY, partial_ms);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err == ESP_OK) {
+        s_pulse_ms = pulse_ms;
+        s_partial_ms = partial_ms;
+        gate_set_pulse_duration(pulse_ms);
+        gate_set_partial_delay(partial_ms);
+    }
+    return err;
+}
+
+/* ---------------------------------------------------------------
  * CSRF token — regenerated every boot, never persisted
  * --------------------------------------------------------------- */
 static char s_token[33];
@@ -305,6 +406,8 @@ static bool body_ok(httpd_req_t *req, char *buf, size_t n)
         httpd_resp_sendstr_chunk(req, _b); \
     } while (0)
 
+#define CHUNK_BIG(req, ...) do {         char _b[640];         snprintf(_b, sizeof(_b), __VA_ARGS__);         httpd_resp_sendstr_chunk(req, _b);     } while (0)
+
 /* An inline POST form rendered as a button, carrying the CSRF token.
  * `extra` holds any additional hidden inputs (or ""). */
 #define POST_BTN(req, action, extra, label) \
@@ -343,7 +446,18 @@ static esp_err_t root_get(httpd_req_t *req)
     fmt_ago(ago_dis, sizeof(ago_dis), s_last_disconnect_us);
     fmt_ago(ago_ip, sizeof(ago_ip), s_last_got_ip_us);
 
+    /* Opt-in auto-refresh: handy while watching the gate travel, but it would
+     * wipe a half-typed password, so it is never on by default. */
+    char query[64] = {0}, flag[8] = {0};
+    bool auto_refresh = false;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        auto_refresh = (httpd_query_key_value(query, "auto", flag, sizeof(flag)) == ESP_OK);
+    }
+
     httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    if (auto_refresh) {
+        httpd_resp_sendstr_chunk(req, "<meta http-equiv=refresh content=5>");
+    }
 
     if (s_ap_pass_is_bootstrap) {
         httpd_resp_sendstr_chunk(req,
@@ -365,8 +479,9 @@ static esp_err_t root_get(httpd_req_t *req)
     CHUNK(req, "<tr><td>RainMaker MQTT</td><td><b>%s</b></td></tr>",
           s_mqtt_connected ? "connected" : "NOT CONNECTED");
     CHUNK(req, "<tr><td>Got IP</td><td>%s</td></tr>", ago_ip);
-    CHUNK(req, "<tr><td>Last disconnect</td><td>reason %d, %s</td></tr>",
-          s_last_disconnect_reason, ago_dis);
+    CHUNK(req, "<tr><td>Last disconnect</td><td>%s</td></tr>", ago_dis);
+    CHUNK(req, "<tr><td>Why</td><td><b>%s</b> (reason %d)</td></tr>",
+          wifi_reason_str(s_last_disconnect_reason), s_last_disconnect_reason);
     CHUNK(req, "<tr><td>Disconnect count</td><td>%lu</td></tr>", (unsigned long)s_disconnect_count);
     httpd_resp_sendstr_chunk(req, "</table>");
 
@@ -377,19 +492,41 @@ static esp_err_t root_get(httpd_req_t *req)
           (unsigned long)esp_get_free_heap_size(), (unsigned long)esp_get_minimum_free_heap_size());
     httpd_resp_sendstr_chunk(req, "</table>");
 
-    httpd_resp_sendstr_chunk(req, "<h3>Gate</h3><table>");
-    html_escape(gate_get_status_string(), esc, sizeof(esc));
-    CHUNK(req, "<tr><td>Status</td><td>%s</td></tr>", esc);
-    CHUNK(req, "<tr><td>Position</td><td>%s</td></tr>", gate_get_position_string());
-    CHUNK(req, "<tr><td>Obstruction</td><td>%s</td></tr>", gate_is_obstructed() ? "ACTIVE" : "clear");
-    httpd_resp_sendstr_chunk(req, "</table><p>");
+    httpd_resp_sendstr_chunk(req, "<h3>Gate</h3><p>");
     POST_BTN(req, "/cmd", "<input type=hidden name=c value=open>", "Open");
     POST_BTN(req, "/cmd", "<input type=hidden name=c value=close>", "Close");
     POST_BTN(req, "/cmd", "<input type=hidden name=c value=stop>", "Stop");
-    POST_BTN(req, "/cmd", "<input type=hidden name=c value=partial>", "Partial");
-    httpd_resp_sendstr_chunk(req, "</p>");
+    POST_BTN(req, "/cmd", "<input type=hidden name=c value=partial>", "Partial open");
+    httpd_resp_sendstr_chunk(req, "</p><table>");
+    html_escape(gate_get_status_string(), esc, sizeof(esc));
+    CHUNK(req, "<tr><td>Status</td><td><b>%s</b></td></tr>", esc);
+    CHUNK(req, "<tr><td>Position (limit switches)</td><td>%s</td></tr>", gate_get_position_string());
+    CHUNK(req, "<tr><td>Obstruction</td><td>%s</td></tr>",
+          gate_is_obstructed() ? "<b>ACTIVE</b>" : "clear");
+    CHUNK(req, "<tr><td>Controller</td><td>%s</td></tr>", gate_state_str());
+    CHUNK(req, "<tr><td>Movement</td><td>%s</td></tr>", gate_move_str());
+    CHUNK(req, "<tr><td>Contact sensor reports</td><td>%s</td></tr>",
+          gate_is_contact_open() ? "open" : "closed");
+    CHUNK(req, "<tr><td>Open limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_OPEN,
+          gpio_get_level(GPIO_LIMIT_OPEN) ? "HIGH (not at limit)" : "LOW (at limit)");
+    CHUNK(req, "<tr><td>Close limit (GPIO %d)</td><td>%s</td></tr>", GPIO_LIMIT_CLOSE,
+          gpio_get_level(GPIO_LIMIT_CLOSE) ? "HIGH (not at limit)" : "LOW (at limit)");
+    httpd_resp_sendstr_chunk(req, "</table>");
 
-    httpd_resp_sendstr_chunk(req, "<h3>Force Wi-Fi</h3><form method=post action=/wifi>");
+    httpd_resp_sendstr_chunk(req, "<h3>Gate timing</h3>"
+        "<p>Pulse = how long a relay is held, i.e. how long the button is "
+        "\"pressed\". Partial delay = how far the gate travels before the partial-open "
+        "sequence sends STOP. Saved on the device.</p><form method=post action=/tune>");
+    CHUNK(req, "<input type=hidden name=t value='%s'>", s_token);
+    CHUNK(req, "<label>Pulse ms (100-2000)<input name=pulse type=number min=100 max=2000 "
+               "value=%lu></label>", (unsigned long)s_pulse_ms);
+    CHUNK(req, "<label>Partial delay ms (500-30000)<input name=partial type=number min=500 "
+               "max=30000 value=%lu></label>", (unsigned long)s_partial_ms);
+    httpd_resp_sendstr_chunk(req, "<button type=submit>Save timing</button></form>");
+
+    httpd_resp_sendstr_chunk(req, "<h3>Force Wi-Fi</h3>"
+        "<p><a href='/scan'>Pick from the networks this node can see</a>, or type a "
+        "hidden SSID here:</p><form method=post action=/wifi>");
     CHUNK(req, "<input type=hidden name=t value='%s'>", s_token);
     httpd_resp_sendstr_chunk(req,
         "<input name=ssid placeholder='SSID' required>"
@@ -404,9 +541,11 @@ static esp_err_t root_get(httpd_req_t *req)
                "<button type=submit>Change</button></form>",
           DIAG_AP_PASS_MIN, DIAG_AP_PASS_MAX);
 
-    httpd_resp_sendstr_chunk(req,
-        "<p><a class=btn href='/'>Refresh</a><a class=btn href='/scan'>Scan APs</a>"
-        "<a class=btn href='/log'>Log</a>");
+    CHUNK(req, "<p><a class=btn href='/'>Refresh</a>"
+               "<a class=btn href='%s'>%s</a>"
+               "<a class=btn href='/scan'>Scan APs</a><a class=btn href='/log'>Log</a>",
+          auto_refresh ? "/" : "/?auto=1",
+          auto_refresh ? "Stop auto-refresh" : "Auto-refresh 5s");
     POST_BTN(req, "/reboot", "", "Reboot");
     httpd_resp_sendstr_chunk(req, "</p>");
     httpd_resp_sendstr_chunk(req, NULL);
@@ -518,6 +657,32 @@ static esp_err_t appass_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t tune_post(httpd_req_t *req)
+{
+    char body[160], pulse[12] = {0}, partial[12] = {0};
+    if (!body_ok(req, body, sizeof(body))) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "bad token");
+        return ESP_FAIL;
+    }
+    httpd_query_key_value(body, "pulse", pulse, sizeof(pulse));
+    httpd_query_key_value(body, "partial", partial, sizeof(partial));
+
+    esp_err_t err = tuning_save(strtoul(pulse, NULL, 10), strtoul(partial, NULL, 10));
+
+    httpd_resp_sendstr_chunk(req, PAGE_HEAD);
+    if (err == ESP_OK) {
+        CHUNK(req, "<p>Saved: pulse %lu ms, partial delay %lu ms.</p>",
+              (unsigned long)s_pulse_ms, (unsigned long)s_partial_ms);
+    } else if (err == ESP_ERR_INVALID_ARG) {
+        httpd_resp_sendstr_chunk(req, "<p>Rejected: out of range.</p>");
+    } else {
+        CHUNK(req, "<p>Failed: %s</p>", esp_err_to_name(err));
+    }
+    httpd_resp_sendstr_chunk(req, "<p><a class=btn href='/'>Back</a></p>");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
 static esp_err_t scan_get(httpd_req_t *req)
 {
     uint16_t n = 0;
@@ -530,13 +695,41 @@ static esp_err_t scan_get(httpd_req_t *req)
         n = sizeof(recs) / sizeof(recs[0]);
         esp_wifi_scan_get_ap_records(&n, recs);
     }
-    CHUNK(req, "<h3>%u APs visible from the gate box</h3><table>", n);
+    CHUNK(req, "<h3>%u networks visible from the gate box</h3>", n);
+    if (n == 0) {
+        httpd_resp_sendstr_chunk(req,
+            "<p>Nothing at all. Either the scan failed, or the box is out of range of "
+            "everything - which is the answer you were looking for.</p>"
+            "<p><a class=btn href='/scan'>Scan again</a><a class=btn href='/'>Back</a></p>");
+        httpd_resp_sendstr_chunk(req, NULL);
+        return ESP_OK;
+    }
+
+    /* Pick one, type the password, connect. Same POST target as the manual
+     * form on the status page. */
+    httpd_resp_sendstr_chunk(req, "<form method=post action=/wifi>");
+    CHUNK(req, "<input type=hidden name=t value='%s'>", s_token);
+    httpd_resp_sendstr_chunk(req, "<select name=ssid>");
     for (uint16_t i = 0; i < n; i++) {
+        if (recs[i].ssid[0] == 0) {
+            continue;           /* hidden SSID, nothing to select */
+        }
         /* SSIDs are whatever the neighbours decided to broadcast. */
         html_escape((char *)recs[i].ssid, esc, sizeof(esc));
-        CHUNK(req, "<tr><td>%s</td><td>%d dBm, ch %d</td></tr>", esc, recs[i].rssi, recs[i].primary);
+        CHUNK_BIG(req, "<option value='%s'>%s  (%d dBm)</option>", esc, esc, recs[i].rssi);
     }
-    httpd_resp_sendstr_chunk(req, "</table><p><a class=btn href='/'>Back</a></p>");
+    httpd_resp_sendstr_chunk(req,
+        "</select><input name=pass type=password placeholder='password'>"
+        "<button type=submit>Connect</button></form>");
+
+    httpd_resp_sendstr_chunk(req, "<table>");
+    for (uint16_t i = 0; i < n; i++) {
+        html_escape((char *)recs[i].ssid, esc, sizeof(esc));
+        CHUNK(req, "<tr><td>%s</td><td>%d dBm, ch %d</td></tr>",
+              recs[i].ssid[0] ? esc : "(hidden)", recs[i].rssi, recs[i].primary);
+    }
+    httpd_resp_sendstr_chunk(req, "</table>"
+        "<p><a class=btn href='/scan'>Scan again</a><a class=btn href='/'>Back</a></p>");
     httpd_resp_sendstr_chunk(req, NULL);
     return ESP_OK;
 }
@@ -631,6 +824,7 @@ void diag_start(const char *name)
     }
 
     ap_pass_load();
+    tuning_load();
     token_init();
 
     snprintf((char *)s_ap_cfg.ap.ssid, sizeof(s_ap_cfg.ap.ssid), DIAG_AP_PREFIX "%s",
@@ -660,6 +854,7 @@ void diag_start(const char *name)
         { .uri = "/cmd",    .method = HTTP_POST, .handler = cmd_post },
         { .uri = "/wifi",   .method = HTTP_POST, .handler = wifi_post },
         { .uri = "/appass", .method = HTTP_POST, .handler = appass_post },
+        { .uri = "/tune",   .method = HTTP_POST, .handler = tune_post },
         { .uri = "/reboot", .method = HTTP_POST, .handler = reboot_post },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
