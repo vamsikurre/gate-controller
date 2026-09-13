@@ -89,7 +89,7 @@ travel. It is off by default because it would wipe a half-typed password; hit
 ## Fixing the Wi-Fi
 
 **Scan APs** does a live scan from inside the box and gives you a dropdown of
-everything it can hear, with signal levels. Pick the network, type the password,
+everything it can hear, strongest first, with signal levels. Pick the network, type the password,
 **Connect**. That is the fix for the common case: router replaced, SSID renamed,
 password changed, or the node latched onto credentials from an old provisioning.
 

@@ -657,6 +657,11 @@ static esp_err_t appass_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static int by_rssi_desc(const void *a, const void *b)
+{
+    return ((const wifi_ap_record_t *)b)->rssi - ((const wifi_ap_record_t *)a)->rssi;
+}
+
 static esp_err_t tune_post(httpd_req_t *req)
 {
     char body[160], pulse[12] = {0}, partial[12] = {0};
@@ -694,6 +699,7 @@ static esp_err_t scan_get(httpd_req_t *req)
     if (esp_wifi_scan_start(NULL, true) == ESP_OK) {
         n = sizeof(recs) / sizeof(recs[0]);
         esp_wifi_scan_get_ap_records(&n, recs);
+        qsort(recs, n, sizeof(recs[0]), by_rssi_desc);   /* strongest first */
     }
     CHUNK(req, "<h3>%u networks visible from the gate box</h3>", n);
     if (n == 0) {
