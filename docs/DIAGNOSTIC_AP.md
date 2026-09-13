@@ -7,6 +7,10 @@ and there is no serial port to plug into.
 
 Implementation: [`../firmware/main/app_diag.c`](../firmware/main/app_diag.c).
 
+The same page is served on the house network too — see
+[On the house network](#on-the-house-network) — so you only need the AP when
+the node cannot reach Wi-Fi at all.
+
 ---
 
 ## Getting in
@@ -83,6 +87,31 @@ next power cut. Ranges are 100–2000 ms and 500–30000 ms.
 **Auto-refresh 5s** reloads the page on a timer — useful while watching the gate
 travel. It is off by default because it would wipe a half-typed password; hit
 **Stop auto-refresh** before filling in a form.
+
+---
+
+## On the house network
+
+One HTTP server, both interfaces. While the node is connected to Wi-Fi the same
+page is on the LAN, no AP needed:
+
+| Node | URL |
+|---|---|
+| Front Gate | **http://front-gate.local/** |
+| Back Gate | **http://back-gate.local/** |
+
+The hostname is derived from the node name, so a third gate follows the same
+pattern. It is also the DHCP hostname, so the router's client list says
+`front-gate` instead of `espressif`, and the page shows both its IP and its
+`.local` name under **This page on your Wi-Fi**.
+
+`.local` resolution needs mDNS: fine on iOS, macOS and modern Android and
+Windows. If it does not resolve on your device, use the IP.
+
+There is no password on the LAN side — anyone already on your Wi-Fi can open
+the gate from a browser. That is the same trust boundary as the RainMaker app
+on a phone that is signed in, but worth knowing before you hand out the guest
+Wi-Fi password.
 
 ---
 

@@ -50,6 +50,7 @@
 #include <esp_http_server.h>
 #include <driver/gpio.h>
 #include <nvs.h>
+#include <mdns.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_rmaker_common_events.h>
@@ -66,6 +67,34 @@ static const char *TAG = "app_diag";
 #define DIAG_NVS_PART_KEY  "partial_ms"
 
 static void diag_apply_ap_config(void);
+
+/* mDNS / DHCP hostname, derived from the node name: "Front Gate" -> "front-gate",
+ * so the page is http://front-gate.local/ on the house network and the router's
+ * client list says something recognisable. */
+static char s_hostname[32];
+
+static void hostname_from(const char *name)
+{
+    size_t o = 0;
+    for (const char *p = name; *p && o < sizeof(s_hostname) - 1; p++) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') {
+            c += 32;
+        }
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            s_hostname[o++] = c;
+        } else if (o > 0 && s_hostname[o - 1] != '-') {
+            s_hostname[o++] = '-';      /* one dash per run of separators */
+        }
+    }
+    while (o > 0 && s_hostname[o - 1] == '-') {
+        o--;                            /* no trailing dash */
+    }
+    s_hostname[o] = 0;
+    if (o == 0) {
+        strlcpy(s_hostname, "gate-node", sizeof(s_hostname));
+    }
+}
 
 /* ---------------------------------------------------------------
  * Log ring buffer
@@ -476,6 +505,12 @@ static esp_err_t root_get(httpd_req_t *req)
         CHUNK(req, "<tr><td>Channel</td><td>%d</td></tr>", ap.primary);
     }
     CHUNK(req, "<tr><td>IP</td><td>" IPSTR "</td></tr>", IP2STR(&ip.ip));
+    if (ip.ip.addr) {
+        CHUNK(req, "<tr><td>This page on your Wi-Fi</td>"
+                   "<td><a href='http://" IPSTR "/'>" IPSTR "</a><br>"
+                   "<a href='http://%s.local/'>%s.local</a></td></tr>",
+              IP2STR(&ip.ip), IP2STR(&ip.ip), s_hostname, s_hostname);
+    }
     CHUNK(req, "<tr><td>RainMaker MQTT</td><td><b>%s</b></td></tr>",
           s_mqtt_connected ? "connected" : "NOT CONNECTED");
     CHUNK(req, "<tr><td>Got IP</td><td>%s</td></tr>", ago_ip);
@@ -867,6 +902,22 @@ void diag_start(const char *name)
         httpd_register_uri_handler(s_httpd, &uris[i]);
     }
 
+    /* Same server, both interfaces: httpd binds INADDR_ANY, so the page is
+     * already reachable on the house network once the node has an IP. These
+     * just make it findable without hunting for the IP. */
+    hostname_from(name ? name : "Gate Node");
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta) {
+        esp_netif_set_hostname(sta, s_hostname);
+    }
+    if (mdns_init() == ESP_OK) {
+        mdns_hostname_set(s_hostname);
+        mdns_instance_name_set(name ? name : "Gate Node");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    } else {
+        ESP_LOGW(TAG, "mDNS init failed; page is still on the node's IP");
+    }
+
     /* ponytail: 30s poll instead of hooking every SDK path that resets the
      * Wi-Fi mode. Upgrade to event hooks only if AP downtime ever matters. */
     const esp_timer_create_args_t targs = {
@@ -881,4 +932,5 @@ void diag_start(const char *name)
     ESP_LOGI(TAG, "Diagnostic AP up: SSID '%s' -> http://%s/ (password: %s)",
              (char *)s_ap_cfg.ap.ssid, DIAG_AP_IP,
              s_ap_pass_is_bootstrap ? "BOOTSTRAP DEFAULT - change it" : "per-node, set on this device");
+    ESP_LOGI(TAG, "Same page on the house network: http://%s.local/", s_hostname);
 }

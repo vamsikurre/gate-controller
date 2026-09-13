@@ -71,8 +71,9 @@ energised for ≥ 2 s is forced off and logged as
 `!!! SAFETY WATCHDOG TRIGGERED !!!`. A stuck relay would otherwise hold the
 gate's input asserted indefinitely.
 
-**Diagnostic AP** — an always-on SoftAP serving a local control and recovery
-page, reachable when the node has no cloud and no Wi-Fi at all: gate buttons and
+**Local control page** — served on the house network at
+`http://front-gate.local/` / `http://back-gate.local/`, and on the node's own
+always-on SoftAP when it cannot reach Wi-Fi at all: gate buttons and
 full gate status, why the Wi-Fi dropped in plain words, a scan-and-pick network
 chooser, gate timing, boot log, reboot. Its password is per node and lives on
 the device; set one the first time you connect to each.
