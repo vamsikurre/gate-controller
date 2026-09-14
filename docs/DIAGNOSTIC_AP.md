@@ -103,8 +103,12 @@ Three guards on it:
 - It only fires while the Wi-Fi link is actually up. If Wi-Fi is down, that is
   an ordinary outage and a reboot fixes nothing.
 - It gives up after **3 consecutive reboots**, so an ISP outage does not become
-  an all-night reboot loop that discards the log each time. The count resets
-  the moment MQTT connects.
+  an all-night reboot loop that discards the log each time. The count survives
+  the reboot in NVS, so the worst case is three reboots over roughly half an
+  hour and then it leaves the node alone.
+- The count is only forgiven once a session has held for **5 minutes**. Clearing
+  it the instant MQTT connects would let a flapping session rearm the watchdog
+  every time and loop forever without ever reaching the cap.
 
 If you see **Watchdog reboots** climbing on the status page, the node is
 reaching the Wi-Fi but not the cloud, and the reboot is papering over

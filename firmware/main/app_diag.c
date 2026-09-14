@@ -76,8 +76,12 @@ static const char *TAG = "app_diag";
  * do that automatically instead of waiting for someone to notice. */
 #define MQTT_STALL_REBOOT_S     (10 * 60)
 /* Stop after this many, so an ISP outage does not turn into an all-night
- * reboot loop that throws away the log each time. Reset once MQTT connects. */
+ * reboot loop that throws away the log each time. */
 #define MQTT_STALL_MAX_REBOOTS  3
+/* How long a session has to hold before the streak is forgiven. Resetting on
+ * connect alone would let a flapping session rearm the watchdog every time and
+ * loop forever without ever reaching the cap. */
+#define MQTT_STABLE_S           (5 * 60)
 
 static void diag_apply_ap_config(void);
 static int64_t mqtt_down_secs(void);
@@ -165,6 +169,7 @@ void diag_log_init(void)
 static bool     s_mqtt_connected;
 static int64_t  s_mqtt_down_since_us;   /* 0 = connected */
 static uint8_t  s_mqtt_reboots;         /* consecutive watchdog reboots */
+static int64_t  s_mqtt_up_since_us;     /* when the current session connected */
 static uint32_t s_disconnect_count;
 static uint8_t  s_last_disconnect_reason;
 static int64_t  s_last_disconnect_us;
@@ -183,16 +188,9 @@ static void diag_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         if (id == RMAKER_MQTT_EVENT_CONNECTED) {
             s_mqtt_connected = true;
             s_mqtt_down_since_us = 0;
-            if (s_mqtt_reboots) {
-                /* Back online: the streak is over. */
-                s_mqtt_reboots = 0;
-                nvs_handle_t h;
-                if (nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-                    nvs_set_u8(h, DIAG_NVS_MQTTRB_KEY, 0);
-                    nvs_commit(h);
-                    nvs_close(h);
-                }
-            }
+            s_mqtt_up_since_us = esp_timer_get_time();
+            /* The streak is cleared by diag_tick once this session has held
+             * for MQTT_STABLE_S, not here - see MQTT_STABLE_S. */
         } else if (id == RMAKER_MQTT_EVENT_DISCONNECTED) {
             s_mqtt_connected = false;
             s_mqtt_down_since_us = esp_timer_get_time();
@@ -1057,9 +1055,30 @@ static void mqtt_stall_watchdog(void)
     esp_restart();
 }
 
+/* Forgive the reboot streak only once a session has proved it can hold. */
+static void mqtt_streak_review(void)
+{
+    if (!s_mqtt_connected || s_mqtt_reboots == 0 || s_mqtt_up_since_us == 0) {
+        return;
+    }
+    if ((esp_timer_get_time() - s_mqtt_up_since_us) / 1000000 < MQTT_STABLE_S) {
+        return;
+    }
+    ESP_LOGI(TAG, "MQTT stable for %ds, clearing watchdog reboot streak (was %d)",
+             MQTT_STABLE_S, s_mqtt_reboots);
+    s_mqtt_reboots = 0;
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, DIAG_NVS_MQTTRB_KEY, 0);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
 static void diag_tick(void *arg)
 {
     ensure_ap();
+    mqtt_streak_review();
     mqtt_stall_watchdog();
 }
 
