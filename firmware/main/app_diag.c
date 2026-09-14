@@ -68,8 +68,19 @@ static const char *TAG = "app_diag";
 #define DIAG_NVS_PULSE_KEY "pulse_ms"
 #define DIAG_NVS_PART_KEY  "partial_ms"
 #define DIAG_NVS_HIDE_KEY  "ap_hidden"
+#define DIAG_NVS_MQTTRB_KEY "mqtt_reboots"
+
+/* If Wi-Fi is up but RainMaker's MQTT session has been down this long, reboot.
+ * Observed in the field: the node keeps its IP, esp-mqtt never recovers, and
+ * the gate sits offline until someone power-cycles it. A reboot fixes it, so
+ * do that automatically instead of waiting for someone to notice. */
+#define MQTT_STALL_REBOOT_S     (10 * 60)
+/* Stop after this many, so an ISP outage does not turn into an all-night
+ * reboot loop that throws away the log each time. Reset once MQTT connects. */
+#define MQTT_STALL_MAX_REBOOTS  3
 
 static void diag_apply_ap_config(void);
+static int64_t mqtt_down_secs(void);
 
 /* Slug of the node name, used two ways: the mDNS/DHCP hostname ("Front Gate"
  * -> front-gate) and the AP SSID ("Front Gate" -> Front-Gate). Runs of
@@ -152,6 +163,8 @@ void diag_log_init(void)
  * Connectivity bookkeeping
  * --------------------------------------------------------------- */
 static bool     s_mqtt_connected;
+static int64_t  s_mqtt_down_since_us;   /* 0 = connected */
+static uint8_t  s_mqtt_reboots;         /* consecutive watchdog reboots */
 static uint32_t s_disconnect_count;
 static uint8_t  s_last_disconnect_reason;
 static int64_t  s_last_disconnect_us;
@@ -169,8 +182,20 @@ static void diag_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == RMAKER_COMMON_EVENT) {
         if (id == RMAKER_MQTT_EVENT_CONNECTED) {
             s_mqtt_connected = true;
+            s_mqtt_down_since_us = 0;
+            if (s_mqtt_reboots) {
+                /* Back online: the streak is over. */
+                s_mqtt_reboots = 0;
+                nvs_handle_t h;
+                if (nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+                    nvs_set_u8(h, DIAG_NVS_MQTTRB_KEY, 0);
+                    nvs_commit(h);
+                    nvs_close(h);
+                }
+            }
         } else if (id == RMAKER_MQTT_EVENT_DISCONNECTED) {
             s_mqtt_connected = false;
+            s_mqtt_down_since_us = esp_timer_get_time();
         }
     }
 }
@@ -602,6 +627,20 @@ static esp_err_t root_get(httpd_req_t *req)
     }
     CHUNK(req, "<tr><td>RainMaker MQTT</td><td><b>%s</b></td></tr>",
           s_mqtt_connected ? "connected" : "NOT CONNECTED");
+    if (!s_mqtt_connected) {
+        long long down = mqtt_down_secs();
+        if (s_mqtt_reboots >= MQTT_STALL_MAX_REBOOTS) {
+            CHUNK(req, "<tr><td>MQTT watchdog</td><td>down %llds, gave up after %d reboots"
+                       "</td></tr>", down, s_mqtt_reboots);
+        } else {
+            CHUNK(req, "<tr><td>MQTT watchdog</td><td>down %llds, reboots in %llds</td></tr>",
+                  down, (long long)MQTT_STALL_REBOOT_S - down);
+        }
+    }
+    if (s_mqtt_reboots) {
+        CHUNK(req, "<tr><td>Watchdog reboots</td><td>%d since MQTT last worked</td></tr>",
+              s_mqtt_reboots);
+    }
     CHUNK(req, "<tr><td>Got IP</td><td>%s</td></tr>", ago_ip);
     CHUNK(req, "<tr><td>Last disconnect</td><td>%s</td></tr>", ago_dis);
     CHUNK(req, "<tr><td>Why</td><td><b>%s</b> (reason %d)</td></tr>",
@@ -961,7 +1000,7 @@ static void diag_apply_ap_config(void)
     esp_wifi_set_config(WIFI_IF_AP, &s_ap_cfg);
 }
 
-static void ensure_ap(void *arg)
+static void ensure_ap(void)
 {
     wifi_mode_t mode;
     if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_APSTA) {
@@ -969,6 +1008,59 @@ static void ensure_ap(void *arg)
     }
     ESP_LOGW(TAG, "Wi-Fi mode drifted to %d, restoring diagnostic AP", mode);
     diag_apply_ap_config();
+}
+
+/* Seconds RainMaker's MQTT session has been down, 0 when it is up. */
+static int64_t mqtt_down_secs(void)
+{
+    if (s_mqtt_connected || s_mqtt_down_since_us == 0) {
+        return 0;
+    }
+    return (esp_timer_get_time() - s_mqtt_down_since_us) / 1000000;
+}
+
+static void mqtt_stall_watchdog(void)
+{
+    if (mqtt_down_secs() < MQTT_STALL_REBOOT_S) {
+        return;
+    }
+    if (s_mqtt_reboots >= MQTT_STALL_MAX_REBOOTS) {
+        return;         /* rebooting is not helping; stop churning the log */
+    }
+
+    /* Only while the Wi-Fi link is actually up - if it is down, this is an
+     * ordinary outage and a reboot fixes nothing. */
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return;
+    }
+
+    /* Never mid-command: a reset with a relay energised would leave the gate
+     * controller holding an input. Wait for the next tick instead. */
+    if (gate_get_state() != GATE_STATE_IDLE || gate_get_movement() != GATE_MOVE_NONE) {
+        ESP_LOGW(TAG, "MQTT stalled but the gate is busy - deferring reboot");
+        return;
+    }
+
+    s_mqtt_reboots++;
+    nvs_handle_t h;
+    if (nvs_open(DIAG_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, DIAG_NVS_MQTTRB_KEY, s_mqtt_reboots);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+
+    ESP_LOGE(TAG, "!!! MQTT STALL WATCHDOG !!! Wi-Fi up (RSSI %d) but RainMaker "
+                  "down for %llds. Rebooting (%d of %d).",
+             ap.rssi, mqtt_down_secs(), s_mqtt_reboots, MQTT_STALL_MAX_REBOOTS);
+    vTaskDelay(pdMS_TO_TICKS(200));     /* let the log line reach the UART */
+    esp_restart();
+}
+
+static void diag_tick(void *arg)
+{
+    ensure_ap();
+    mqtt_stall_watchdog();
 }
 
 void diag_start(const char *name)
@@ -984,6 +1076,13 @@ void diag_start(const char *name)
 
     strlcpy(s_node_name, name ? name : "Gate", sizeof(s_node_name));
     html_escape(s_node_name, s_node_esc, sizeof(s_node_esc));
+
+    s_mqtt_down_since_us = esp_timer_get_time();
+    nvs_handle_t nh;
+    if (nvs_open(DIAG_NVS_NS, NVS_READONLY, &nh) == ESP_OK) {
+        nvs_get_u8(nh, DIAG_NVS_MQTTRB_KEY, &s_mqtt_reboots);
+        nvs_close(nh);
+    }
 
     ap_pass_load();
     ap_hidden_load();
@@ -1054,8 +1153,8 @@ void diag_start(const char *name)
     /* ponytail: 30s poll instead of hooking every SDK path that resets the
      * Wi-Fi mode. Upgrade to event hooks only if AP downtime ever matters. */
     const esp_timer_create_args_t targs = {
-        .callback = ensure_ap,
-        .name = "diag_ap_keepalive",
+        .callback = diag_tick,
+        .name = "diag_tick",
     };
     esp_timer_handle_t t;
     if (esp_timer_create(&targs, &t) == ESP_OK) {

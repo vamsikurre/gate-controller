@@ -73,6 +73,8 @@ next power cut. Ranges are 100–2000 ms and 500–30000 ms.
 | RSSI | signal at the gate box. Below −75 dBm is the usual culprit |
 | IP | `0.0.0.0` means associated but no DHCP lease |
 | RainMaker MQTT | the actual "is it online in the app" answer |
+| MQTT watchdog | shown while MQTT is down: how long, and how long until the node reboots itself |
+| Watchdog reboots | how many times it has rebooted itself without MQTT coming back |
 | Last disconnect | how long ago |
 | **Why** | the disconnect reason in words — "WRONG PASSWORD", "NETWORK NOT FOUND", "beacon lost — signal dropped out" — with the raw code after it |
 | Disconnect count | climbing steadily = flapping link, not a one-off |
@@ -83,6 +85,31 @@ next power cut. Ranges are 100–2000 ms and 500–30000 ms.
 - `Last reset: BROWNOUT` → power problem, see [WIRING.md](WIRING.md#2-power).
 - `Last reset: PANIC` or a watchdog → firmware crash; the log should show it.
 - Free heap trending toward zero across visits → leak.
+
+### The MQTT stall watchdog
+
+The failure this whole page was built to catch: Wi-Fi connected, IP fine, but
+RainMaker offline — the node holds its address and esp-mqtt never recovers, so
+the gate is dead in the app until someone power-cycles it. A reboot fixes it
+every time.
+
+So the node now does that itself. If the Wi-Fi link is up but MQTT has been
+down for **10 minutes**, it logs `!!! MQTT STALL WATCHDOG !!!` and reboots.
+
+Three guards on it:
+
+- It never reboots mid-command. A reset with a relay energised would leave the
+  gate controller holding an input, so it waits for the gate to be idle.
+- It only fires while the Wi-Fi link is actually up. If Wi-Fi is down, that is
+  an ordinary outage and a reboot fixes nothing.
+- It gives up after **3 consecutive reboots**, so an ISP outage does not become
+  an all-night reboot loop that discards the log each time. The count resets
+  the moment MQTT connects.
+
+If you see **Watchdog reboots** climbing on the status page, the node is
+reaching the Wi-Fi but not the cloud, and the reboot is papering over
+something. The log from before the last reboot is gone — it lives in RAM — so
+catch it live if it happens again.
 
 **Auto-refresh 5s** reloads the page on a timer — useful while watching the gate
 travel. It is off by default because it would wipe a half-typed password; hit
