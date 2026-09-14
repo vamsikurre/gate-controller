@@ -366,11 +366,11 @@ static esp_err_t write_cb(const esp_rmaker_device_t *device,
  *   Node "Gate Controller"
  *   └── Device "Sliding Gate"
  *       ├── Status        (read-only text — shown at top)
- *       ├── IP Address    (read-only text — for reaching the local page)
  *       ├── Open          (push button)
  *       ├── Close         (push button)
  *       ├── Stop          (push button)
- *       └── Partial Open  (push button)
+ *       ├── Partial Open  (push button)
+ *       └── IP Address    (read-only text — for reaching the local page)
  * --------------------------------------------------------------- */
 static esp_rmaker_device_t *create_gate_device(const char *device_name)
 {
@@ -391,14 +391,6 @@ static esp_rmaker_device_t *create_gate_device(const char *device_name)
         PARAM_STATUS, ESP_RMAKER_PARAM_OTA_STATUS, esp_rmaker_str("Idle"),
         PROP_FLAG_READ);
     esp_rmaker_device_add_param(device, status_param);
-
-    /* ---- IP Address (read-only text) ----
-     * The node serves its own control page on the LAN. Showing the address
-     * here means you do not have to go hunting through the router to find it.
-     * Custom type: Alexa ignores it, the app renders it as text. */
-    esp_rmaker_param_t *ip_param = esp_rmaker_param_create(
-        PARAM_IP_ADDRESS, NULL, esp_rmaker_str("0.0.0.0"), PROP_FLAG_READ);
-    esp_rmaker_device_add_param(device, ip_param);
 
     /* ---- Open Button (Primary Parameter) ----
      * We assign the Open button as the primary parameter of the device.
@@ -432,6 +424,15 @@ static esp_rmaker_device_t *create_gate_device(const char *device_name)
         PROP_FLAG_READ | PROP_FLAG_WRITE);
     esp_rmaker_param_add_ui_type(partial_param, ESP_RMAKER_UI_TRIGGER);
     esp_rmaker_device_add_param(device, partial_param);
+
+    /* ---- IP Address (read-only text) ----
+     * The node serves its own control page on the LAN; this saves hunting
+     * through the router for the address. Added last, so it renders at the
+     * bottom of the device card - the app lays params out in add order.
+     * Custom type: Alexa ignores it, the app renders it as text. */
+    esp_rmaker_param_t *ip_param = esp_rmaker_param_create(
+        PARAM_IP_ADDRESS, NULL, esp_rmaker_str("0.0.0.0"), PROP_FLAG_READ);
+    esp_rmaker_device_add_param(device, ip_param);
 
     return device;
 }
